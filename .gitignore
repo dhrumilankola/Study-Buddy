@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment
+venv/
+env/
+
+# Environment variables and configuration
+*.env
+config.yaml
+
+# Temporary files and logs
+*.log
+*.tmp
+*.swp
+*.swo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Uploaded files and generated data
+data/uploads/
+data/vector_store/
+
+# Node.js dependencies for frontend
+frontend/node_modules/
+frontend/.parcel-cache/
+frontend/dist/
+
+# Coverage reports
+*.cover
+.coverage
+*.coverage.*
+htmlcov/
+
+# Docker
+*.pid
+*.seed
+docker-compose.override.yml
+
+# Build files
+build/
+dist/
+
+# Cache and IDE settings
+*.cache/
+*.idea/
+*.vscode/
+*.iml
