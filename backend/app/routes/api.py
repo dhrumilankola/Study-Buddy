@@ -154,3 +154,55 @@ async def check_status():
             status_code=500,
             detail=f"Error checking status: {str(e)}"
         )
+        
+@router.delete("/documents/{filename}")
+async def delete_document(filename: str):
+    """Delete a document and its vector store entries"""
+    try:
+        # Construct file path
+        file_path = os.path.join(settings.UPLOAD_DIR, filename)
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document {filename} not found"
+            )
+            
+        # Delete the file
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error deleting file: {str(e)}"
+            )
+            
+        # Delete from vector store if it exists
+        try:
+            if rag_service.vector_store_service._vector_store:
+                # Filter documents with matching filename in metadata
+                docs = rag_service.vector_store_service._vector_store.get(
+                    where={"filename": filename}
+                )
+                if docs:
+                    # Delete matching documents from vector store
+                    rag_service.vector_store_service._vector_store.delete(
+                        where={"filename": filename}
+                    )
+        except Exception as e:
+            print(f"Error cleaning up vector store: {str(e)}")
+            # Don't raise error here as file is already deleted
+            
+        return {
+            "status": "success",
+            "message": f"Document {filename} deleted successfully"
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing delete request: {str(e)}"
+        )

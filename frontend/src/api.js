@@ -103,3 +103,20 @@ export const checkStatus = async () => {
     throw new Error(error.response?.data?.detail || 'Error checking status');
   }
 };
+
+export const deleteDocument = async (filename) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/documents/${encodeURIComponent(filename)}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Error deleting document');
+      }
+      
+      return await response.json();
+    } catch (error) {
+      throw new Error(error.message || 'Error deleting document');
+    }
+  };

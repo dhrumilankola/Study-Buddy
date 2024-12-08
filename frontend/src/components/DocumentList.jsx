@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { FileText, Trash2, Calendar, FileBox, Loader2, RefreshCw } from 'lucide-react';
-import { listDocuments } from '../api';
+import { listDocuments, deleteDocument } from '../api';
 
 export default function DocumentList() {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [deletingFiles, setDeletingFiles] = useState(new Set());
+
 
   useEffect(() => {
     fetchDocuments();
@@ -22,6 +24,38 @@ export default function DocumentList() {
       console.error('Error fetching documents:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (filename) => {
+    // Ask for confirmation
+    if (!window.confirm(`Are you sure you want to delete ${filename}?`)) {
+      return;
+    }
+
+    try {
+      // Add file to deleting set
+      setDeletingFiles(prev => new Set(prev).add(filename));
+      
+      // Call delete API
+      await deleteDocument(filename);
+      
+      // Remove from documents list
+      setDocuments(prev => prev.filter(doc => doc.filename !== filename));
+      
+      // Show success message (optional)
+      console.log(`Successfully deleted ${filename}`);
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      // Show error message
+      setError(`Failed to delete ${filename}`);
+    } finally {
+      // Remove from deleting set
+      setDeletingFiles(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(filename);
+        return newSet;
+      });
     }
   };
 
@@ -127,10 +161,15 @@ export default function DocumentList() {
               </div>
               
               <button 
-                onClick={() => console.log('Delete:', doc.filename)}
-                className="rounded-md p-2 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10"
+                onClick={() => handleDelete(doc.filename)}
+                disabled={deletingFiles.has(doc.filename)}
+                className="rounded-md p-2 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 disabled:opacity-50"
               >
-                <Trash2 className="h-4 w-4 text-destructive" />
+                {deletingFiles.has(doc.filename) ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-destructive" />
+                ) : (
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                )}
               </button>
             </div>
             
