@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Layout from './components/Layout';
 import ChatInterface from './components/ChatInterface';
 import DocumentList from './components/DocumentList';
@@ -8,36 +8,89 @@ import StatusIndicator from './components/StatusIndicator';
 export default function App() {
   const [currentView, setCurrentView] = useState('chat');
   const [showUpload, setShowUpload] = useState(false);
+  const [isTransitioning, setIsTransitioning] = useState(false);
 
-  // Function to handle navigation from header
+  // Handle view transitions
   const handleNavigation = (view) => {
-    setCurrentView(view);
-    setShowUpload(false);
+    if (view === currentView && !showUpload) return;
+    
+    setIsTransitioning(true);
+    setTimeout(() => {
+      setCurrentView(view);
+      setShowUpload(false);
+      setIsTransitioning(false);
+    }, 150); // Match this with CSS transition duration
   };
 
-  // Function to handle upload button click
+  // Handle upload modal
   const handleUploadClick = () => {
-    setShowUpload(true);
+    setIsTransitioning(true);
+    setTimeout(() => {
+      setShowUpload(true);
+      setIsTransitioning(false);
+    }, 150);
+  };
+
+  // Handle upload completion
+  const handleUploadComplete = () => {
+    setIsTransitioning(true);
+    setTimeout(() => {
+      setShowUpload(false);
+      setCurrentView('documents'); // Navigate to documents view after upload
+      setIsTransitioning(false);
+    }, 150);
+  };
+
+  // Handle escape key to close upload
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && showUpload) {
+        setShowUpload(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [showUpload]);
+
+  const renderCurrentView = () => {
+    if (showUpload) {
+      return (
+        <div className="animate-fade-in">
+          <FileUpload onComplete={handleUploadComplete} onClose={() => setShowUpload(false)} />
+        </div>
+      );
+    }
+
+    switch (currentView) {
+      case 'chat':
+        return (
+          <div className="space-y-6 animate-fade-in">
+            <StatusIndicator />
+            <ChatInterface />
+          </div>
+        );
+      case 'documents':
+        return (
+          <div className="space-y-6 animate-fade-in">
+            <StatusIndicator />
+            <DocumentList />
+          </div>
+        );
+      default:
+        return null;
+    }
   };
 
   return (
-    <Layout onNavigate={handleNavigation} onUploadClick={handleUploadClick}>
+    <Layout 
+      onNavigate={handleNavigation} 
+      onUploadClick={handleUploadClick}
+    >
       <div className="container mx-auto px-4">
-        {/* Status indicator at the top */}
-        <div className="mb-6">
-          <StatusIndicator />
-        </div>
-
-        {/* Main content area */}
-        <div className="space-y-6">
-          {showUpload ? (
-            <FileUpload onClose={() => setShowUpload(false)} />
-          ) : (
-            <>
-              {currentView === 'chat' && <ChatInterface />}
-              {currentView === 'documents' && <DocumentList />}
-            </>
-          )}
+        {/* Transition wrapper */}
+        <div className={`transition-opacity duration-150 ${isTransitioning ? 'opacity-0' : 'opacity-100'}`}>
+          {renderCurrentView()}
         </div>
       </div>
     </Layout>

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Upload, X, FileText, Check } from 'lucide-react';
+import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { uploadDocument } from '../api';
 
 export default function FileUpload() {
@@ -26,7 +26,8 @@ export default function FileUpload() {
     setFiles(prev => [...prev, ...droppedFiles.map(file => ({
       file,
       status: 'pending',
-      error: null
+      error: null,
+      progress: 0
     }))]);
   }, []);
 
@@ -35,7 +36,8 @@ export default function FileUpload() {
     setFiles(prev => [...prev, ...selectedFiles.map(file => ({
       file,
       status: 'pending',
-      error: null
+      error: null,
+      progress: 0
     }))]);
   };
 
@@ -46,10 +48,17 @@ export default function FileUpload() {
       if (fileObj.status === 'completed') continue;
       
       try {
-        await uploadDocument(fileObj.file);
         setFiles(prev => prev.map(f => 
           f.file === fileObj.file 
-            ? { ...f, status: 'completed', error: null }
+            ? { ...f, status: 'uploading', progress: 0 }
+            : f
+        ));
+
+        await uploadDocument(fileObj.file);
+
+        setFiles(prev => prev.map(f => 
+          f.file === fileObj.file 
+            ? { ...f, status: 'completed', progress: 100 }
             : f
         ));
       } catch (error) {
@@ -69,9 +78,9 @@ export default function FileUpload() {
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto">
+    <div className="w-full max-w-2xl mx-auto space-y-4">
       <div
-        className={`relative rounded-lg border-2 border-dashed p-6 transition-all
+        className={`relative rounded-lg border-2 border-dashed transition-all p-6
           ${dragActive ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
           ${files.length > 0 ? 'pb-24' : ''}`}
         onDragEnter={handleDrag}
@@ -84,6 +93,7 @@ export default function FileUpload() {
           multiple
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           onChange={handleFileChange}
+          accept=".pdf,.txt,.pptx,.ipynb"
         />
         
         <div className="text-center">
@@ -95,29 +105,35 @@ export default function FileUpload() {
         </div>
 
         {files.length > 0 && (
-          <div className="absolute bottom-0 left-0 right-0 p-4 bg-muted/50 rounded-b-lg">
+          <div className="absolute bottom-0 left-0 right-0 bg-card border-t rounded-b-lg p-4">
             <div className="space-y-2">
               {files.map((fileObj, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center justify-between p-2 bg-background rounded-md"
+                  className="flex items-center justify-between p-2 bg-accent/50 rounded-md"
                 >
                   <div className="flex items-center space-x-2">
-                    <FileText className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm truncate max-w-[200px]">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <span className="text-sm truncate max-w-[200px]" title={fileObj.file.name}>
                       {fileObj.file.name}
                     </span>
                   </div>
                   <div className="flex items-center space-x-2">
+                    {fileObj.status === 'uploading' && (
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    )}
                     {fileObj.status === 'completed' && (
-                      <Check className="h-4 w-4 text-green-500" />
+                      <CheckCircle2 className="h-4 w-4 text-green-500" />
                     )}
                     {fileObj.status === 'error' && (
-                      <span className="text-xs text-destructive">{fileObj.error}</span>
+                      <div className="flex items-center space-x-1 text-destructive">
+                        <AlertCircle className="h-4 w-4" />
+                        <span className="text-xs">{fileObj.error}</span>
+                      </div>
                     )}
                     <button
                       onClick={() => removeFile(fileObj)}
-                      className="p-1 hover:bg-muted rounded"
+                      className="p-1 hover:bg-accent rounded transition-colors"
                     >
                       <X className="h-4 w-4 text-muted-foreground" />
                     </button>
@@ -129,13 +145,20 @@ export default function FileUpload() {
             <button
               onClick={handleUpload}
               disabled={uploading || files.length === 0}
-              className={`mt-3 w-full rounded-md px-3 py-2 text-sm font-medium text-white
+              className={`mt-3 w-full rounded-md px-3 py-2 text-sm font-medium text-primary-foreground
                 ${uploading 
                   ? 'bg-primary/70 cursor-not-allowed' 
                   : 'bg-primary hover:bg-primary/90'
-                }`}
+                } transition-colors`}
             >
-              {uploading ? 'Uploading...' : 'Upload Files'}
+              {uploading ? (
+                <span className="flex items-center justify-center space-x-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Uploading...</span>
+                </span>
+              ) : (
+                'Upload Files'
+              )}
             </button>
           </div>
         )}

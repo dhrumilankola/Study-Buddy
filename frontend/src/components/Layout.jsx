@@ -5,11 +5,12 @@ export default function Layout({ children, onNavigate, onUploadClick }) {
     <div className="min-h-screen bg-background font-sans antialiased">
       <div className="relative flex min-h-screen flex-col">
         <Header onNavigate={onNavigate} onUploadClick={onUploadClick} />
-        <main className="flex-1">
-          <div className="container flex-1 items-start py-6">
+        <main className="flex-1 overflow-hidden">
+          <div className="container h-[calc(100vh-4rem)] py-6">
             {children}
           </div>
         </main>
+        <div className="fixed inset-x-0 bottom-0 h-12 bg-gradient-to-t from-background to-transparent pointer-events-none" />
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Trash2, Calendar, FileBox } from 'lucide-react';
+import { FileText, Trash2, Calendar, FileBox, Loader2, RefreshCw } from 'lucide-react';
 import { listDocuments } from '../api';
 
 export default function DocumentList() {
@@ -43,66 +43,100 @@ export default function DocumentList() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-pulse text-muted-foreground">Loading documents...</div>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Your Documents</h2>
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="animate-pulse rounded-lg border bg-card p-6">
+              <div className="h-6 w-3/4 bg-muted rounded mb-4" />
+              <div className="space-y-2">
+                <div className="h-4 w-1/2 bg-muted rounded" />
+                <div className="h-4 w-1/3 bg-muted rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-64">
-        <div className="text-destructive mb-2">{error}</div>
-        <button
-          onClick={fetchDocuments}
-          className="text-sm text-primary hover:underline"
-        >
-          Try again
-        </button>
+      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-6">
+        <div className="flex flex-col items-center justify-center space-y-2">
+          <AlertCircle className="h-6 w-6 text-destructive" />
+          <p className="text-sm font-medium text-destructive">{error}</p>
+          <button
+            onClick={fetchDocuments}
+            className="inline-flex items-center space-x-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span>Try again</span>
+          </button>
+        </div>
       </div>
     );
   }
 
   if (documents.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-64">
-        <FileBox className="h-12 w-12 text-muted-foreground mb-2" />
+      <div className="flex flex-col items-center justify-center rounded-lg border bg-card p-12">
+        <FileBox className="h-12 w-12 text-muted-foreground mb-4" />
         <h3 className="text-lg font-semibold">No documents yet</h3>
-        <p className="text-muted-foreground">Upload some documents to get started</p>
+        <p className="text-sm text-muted-foreground mt-1">Upload some documents to get started</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">Your Documents</h2>
-      <div className="grid gap-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Your Documents</h2>
+        <button
+          onClick={fetchDocuments}
+          className="inline-flex items-center space-x-1 rounded-md bg-secondary px-2 py-1 text-sm hover:bg-secondary/80"
+        >
+          <RefreshCw className="h-4 w-4" />
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {documents.map((doc) => (
           <div
             key={doc.filename}
-            className="flex items-center justify-between p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
+            className="group relative rounded-lg border bg-card p-6 transition-all hover:shadow-md"
           >
-            <div className="flex items-center space-x-4">
-              <div className="p-2 rounded-md bg-primary/10">
-                <FileText className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <h3 className="font-medium">{doc.filename}</h3>
-                <div className="flex items-center space-x-4 text-sm text-muted-foreground">
-                  <span className="flex items-center">
-                    <Calendar className="h-4 w-4 mr-1" />
-                    {formatDate(doc.upload_date)}
-                  </span>
-                  <span>{formatFileSize(doc.size)}</span>
+            <div className="flex items-start justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="rounded-lg bg-primary/10 p-2">
+                  <FileText className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <h3 className="font-medium truncate max-w-[200px]" title={doc.filename}>
+                    {doc.filename}
+                  </h3>
+                  <div className="flex items-center space-x-2 text-sm text-muted-foreground">
+                    <Calendar className="h-3 w-3" />
+                    <span>{formatDate(doc.upload_date)}</span>
+                  </div>
                 </div>
               </div>
+              
+              <button 
+                onClick={() => console.log('Delete:', doc.filename)}
+                className="rounded-md p-2 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10"
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </button>
             </div>
-            <button 
-              className="p-2 hover:bg-destructive/10 rounded-md group"
-              onClick={() => console.log('Delete:', doc.filename)}
-            >
-              <Trash2 className="h-5 w-5 text-muted-foreground group-hover:text-destructive" />
-            </button>
+            
+            <div className="mt-4 text-xs text-muted-foreground">
+              {formatFileSize(doc.size)}
+            </div>
           </div>
         ))}
       </div>

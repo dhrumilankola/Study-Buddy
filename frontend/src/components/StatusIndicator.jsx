@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle2, AlertCircle, Database, Bot } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Database, Bot, Loader2 } from 'lucide-react';
 import { checkStatus } from '../api';
 
 export default function StatusIndicator() {
@@ -29,48 +29,55 @@ export default function StatusIndicator() {
 
   if (loading) {
     return (
-      <div className="animate-pulse p-4 bg-card rounded-lg">
-        <div className="h-4 bg-muted rounded w-3/4 mb-2"></div>
-        <div className="h-4 bg-muted rounded w-1/2"></div>
+      <div className="animate-pulse rounded-lg border bg-card p-4">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="h-4 w-24 bg-muted rounded" />
+            <div className="h-4 w-32 bg-muted rounded" />
+          </div>
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-4 bg-destructive/10 text-destructive rounded-lg">
-        <div className="flex items-center space-x-2">
+      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
+        <div className="flex items-center space-x-2 text-destructive">
           <AlertCircle className="h-4 w-4" />
-          <span>{error}</span>
+          <span className="text-sm font-medium">{error}</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="p-4 bg-card rounded-lg space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="font-medium">System Status</h3>
-        <div className="flex items-center space-x-2">
-          <CheckCircle2 className="h-4 w-4 text-green-500" />
-          <span className="text-sm text-muted-foreground">Operational</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="flex items-center space-x-2">
-          <Database className="h-4 w-4 text-primary" />
-          <div className="text-sm">
-            <p className="text-muted-foreground">Documents</p>
-            <p className="font-medium">{status?.documents_in_vector_store || 0}</p>
+    <div className="rounded-lg border bg-card p-4 transition-all hover:shadow-md">
+      <div className="flex flex-col space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-medium text-card-foreground">System Status</h3>
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            <span className="text-sm text-muted-foreground">Operational</span>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
-          <Bot className="h-4 w-4 text-primary" />
-          <div className="text-sm">
-            <p className="text-muted-foreground">Model</p>
-            <p className="font-medium">{status?.ollama_model || 'Unknown'}</p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex items-center space-x-3 rounded-md bg-accent/50 p-3">
+            <Database className="h-4 w-4 text-primary" />
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">Documents Indexed</p>
+              <p className="font-medium">{status?.documents_in_vector_store || 0}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-3 rounded-md bg-accent/50 p-3">
+            <Bot className="h-4 w-4 text-primary" />
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">Active Model</p>
+              <p className="font-medium">{status?.ollama_model || 'Unknown'}</p>
+            </div>
           </div>
         </div>
       </div>
