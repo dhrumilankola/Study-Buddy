@@ -5,9 +5,16 @@ import os
 import uuid
 from datetime import datetime
 import aiofiles
-from app.models.schemas import Document, Query
+from app.models.schemas import Document, Query, ModelConfig, ModelStatus
 from app.services.rag_service import RAGService
 from app.config import settings
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 rag_service = RAGService()
@@ -16,9 +23,11 @@ rag_service = RAGService()
 async def upload_documents(file: UploadFile = File(...)):
     """Upload and process a document"""
     try:
+        logger.info(f"Processing upload for file: {file.filename}")
         # Validate file extension
         file_extension = os.path.splitext(file.filename)[1].lower()
         if file_extension not in ['.pdf', '.txt', '.pptx', '.ipynb']:
+            logger.warning(f"Unsupported file type attempted: {file_extension}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported file type: {file_extension}"
@@ -42,16 +51,17 @@ async def upload_documents(file: UploadFile = File(...)):
         async with aiofiles.open(file_path, 'wb') as out_file:
             await out_file.write(content)
             document.file_size = len(content)
-            print(f"File saved: {file_path}")
+            logger.info(f"File saved successfully: {file_path}")
 
         try:
             # Process document
+            logger.info(f"Starting document processing for {document.filename}")
             success = await rag_service.process_document(document, file_path)
             if success:
                 document.processed = True
-                print(f"Document processed successfully: {document.filename}")
+                logger.info(f"Document processed successfully: {document.filename}")
             else:
-                print(f"Document processing failed: {document.filename}")
+                logger.error(f"Document processing failed: {document.filename}")
 
             return {
                 "status": "success" if document.processed else "error",
@@ -65,7 +75,7 @@ async def upload_documents(file: UploadFile = File(...)):
             }
 
         except Exception as e:
-            print(f"Error processing document: {str(e)}")
+            logger.error(f"Error processing document: {str(e)}", exc_info=True)
             if os.path.exists(file_path):
                 os.remove(file_path)
             raise HTTPException(
@@ -74,7 +84,7 @@ async def upload_documents(file: UploadFile = File(...)):
             )
 
     except Exception as e:
-        print(f"Error in upload: {str(e)}")
+        logger.error(f"Error in upload: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Error uploading file: {str(e)}"
@@ -101,10 +111,35 @@ async def list_documents():
             detail=f"Error listing documents: {str(e)}"
         )
 
+@router.post("/model/switch")
+async def switch_model(config: ModelConfig):
+    """Switch between model providers"""
+    try:
+        success = rag_service.switch_provider(config.provider)
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to switch to provider: {config.provider}"
+            )
+            
+        return {
+            "status": "success",
+            "message": f"Switched to {config.provider} provider",
+            "config": config
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error switching model provider: {str(e)}"
+        )
+
 @router.post("/query/")
 async def query_documents(query: Query):
     """Query processed documents and get AI response"""
     try:
+        logger.info(f"Received query: {query.question}")
+        logger.debug(f"Context window size: {query.context_window}")
+        
         response_generator = rag_service.generate_response(query)
         
         return StreamingResponse(
@@ -117,6 +152,7 @@ async def query_documents(query: Query):
             }
         )
     except Exception as e:
+        logger.error(f"Error in query_documents: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/health")
@@ -129,24 +165,34 @@ async def health_check():
     
 @router.get("/status")
 async def check_status():
-    """Check system status and document count"""
+    """Check system status including current model configuration"""
     try:
         # Get vector store statistics
         doc_count = 0
         if rag_service.vector_store_service._vector_store:
             doc_count = len(rag_service.vector_store_service._vector_store.get())
         
-        # Check uploaded files
-        upload_dir = settings.UPLOAD_DIR
-        uploaded_files = []
-        if os.path.exists(upload_dir):
-            uploaded_files = [f for f in os.listdir(upload_dir) if os.path.isfile(os.path.join(upload_dir, f))]
-
+        # Get current model info
+        current_provider = rag_service.current_provider
+        model_name = (
+            settings.GEMINI_MODEL 
+            if current_provider == "gemini" 
+            else settings.OLLAMA_MODEL
+        )
+        
+        # Check if Gemini is available
+        gemini_available = bool(settings.GOOGLE_API_KEY)
+        
         return {
             "status": "healthy",
-            "documents_in_vector_store": doc_count,
-            "uploaded_files": uploaded_files,
-            "ollama_model": settings.OLLAMA_MODEL,
+            "current_provider": current_provider,
+            "model_name": model_name,
+            "temperature": settings.MODEL_TEMPERATURE,
+            "documents_indexed": doc_count,
+            "providers_available": {
+                "ollama": True,  # Assuming Ollama is always available locally
+                "gemini": gemini_available
+            },
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:

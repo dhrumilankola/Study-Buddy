@@ -1,5 +1,6 @@
+from langchain_core.embeddings import Embeddings
+from langchain_chroma import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain_community.vectorstores import Chroma
 from typing import List, Dict, Optional
 import os
 from app.config import settings
@@ -24,9 +25,8 @@ class VectorStoreService:
         try:
             self._vector_store = Chroma(
                 persist_directory=self.vector_store_path,
-                embedding_function=self.embeddings
+                embedding_function=self.embeddings,
             )
-            self._vector_store.persist()
         except Exception as e:
             logger.error(f"Error initializing vector store: {str(e)}")
             raise
@@ -39,7 +39,6 @@ class VectorStoreService:
                 return False
             
             self.vector_store.add_texts(texts=texts, metadatas=metadatas)
-            self.vector_store.persist()
             return True
         except Exception as e:
             logger.error(f"Error adding documents to vector store: {str(e)}")

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Bot, User } from 'lucide-react';
-import { queryDocuments } from '../api';
+import { Send, Loader2, Bot, Cpu, User, MessagesSquare } from 'lucide-react';
+import { queryDocuments, switchModel } from '../api';
 
 export default function ChatInterface() {
   const [messages, setMessages] = useState([]);
@@ -8,6 +8,8 @@ export default function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const [selectedModel, setSelectedModel] = useState('ollama');
+  const [switchingModel, setSwitchingModel] = useState(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -16,6 +18,20 @@ export default function ChatInterface() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  const handleModelSwitch = async (provider) => {
+    if (provider === selectedModel || isLoading || switchingModel) return;
+    
+    try {
+      setSwitchingModel(true);
+      await switchModel(provider);
+      setSelectedModel(provider);
+    } catch (error) {
+      console.error('Error switching model:', error);
+    } finally {
+      setSwitchingModel(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -34,21 +50,50 @@ export default function ChatInterface() {
       setMessages(prev => [...prev, { type: 'assistant', content: '', loading: true }]);
 
       // Get streaming response
-      const stream = await queryDocuments(question);
+      const response = await queryDocuments(question, 3, selectedModel);
       
-      for await (const data of stream) {
-        if (data.type === 'error') {
-          setMessages(prev => [
-            ...prev.slice(0, -1),
-            { type: 'error', content: data.content }
-          ]);
-          break;
-        } else if (data.type === 'response') {
-          assistantMessage += data.content;
-          setMessages(prev => [
-            ...prev.slice(0, -1),
-            { type: 'assistant', content: assistantMessage }
-          ]);
+      // Set up text decoder
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        // Decode the stream chunk
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+        
+        // Process each line
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              if (data.type === 'error') {
+                setMessages(prev => [
+                  ...prev.slice(0, -1),
+                  { type: 'error', content: data.content }
+                ]);
+                break;
+              } else if (data.type === 'response') {
+                assistantMessage += data.content;
+                setMessages(prev => [
+                  ...prev.slice(0, -1),
+                  { 
+                    type: 'assistant', 
+                    content: assistantMessage,
+                    model: data.provider 
+                  }
+                ]);
+              } else if (data.type === 'done') {
+                // Optional: handle completion
+                break;
+              }
+            } catch (e) {
+              console.error('Error parsing SSE data:', e);
+            }
+          }
         }
       }
     } catch (error) {
@@ -101,10 +146,38 @@ export default function ChatInterface() {
 
   return (
     <div className="flex h-[calc(100vh-16rem)] flex-col rounded-lg border bg-card">
-      <div 
-        ref={chatContainerRef}
-        className="flex-1 overflow-y-auto p-4 space-y-4"
-      >
+      {/* Model Selector */}
+      <div className="border-b px-4 py-2">
+        <div className="flex items-center justify-end space-x-2">
+          <button
+            onClick={() => handleModelSwitch('ollama')}
+            disabled={switchingModel}
+            className={`inline-flex items-center space-x-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              selectedModel === 'ollama'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent'
+            }`}
+          >
+            <Cpu className="h-4 w-4" />
+            <span>Ollama</span>
+          </button>
+          <button
+            onClick={() => handleModelSwitch('gemini')}
+            disabled={switchingModel}
+            className={`inline-flex items-center space-x-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              selectedModel === 'gemini'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent'
+            }`}
+          >
+            <Bot className="h-4 w-4" />
+            <span>Gemini</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Chat Messages */}
+      <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => (
           <div key={index} className="animate-fade-in">
             <MessageBubble message={message} />
@@ -113,22 +186,20 @@ export default function ChatInterface() {
         <div ref={messagesEndRef} />
       </div>
 
-      <form 
-        onSubmit={handleSubmit} 
-        className="border-t bg-card p-4"
-      >
+      {/* Input Form */}
+      <form onSubmit={handleSubmit} className="border-t bg-card p-4">
         <div className="flex space-x-2">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask a question..."
+            placeholder={`Ask a question using ${selectedModel === 'gemini' ? 'Google Gemini' : 'Ollama'}...`}
             className="flex-1 min-w-0 rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            disabled={isLoading}
+            disabled={isLoading || switchingModel}
           />
           <button
             type="submit"
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || switchingModel || !input.trim()}
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             {isLoading ? (

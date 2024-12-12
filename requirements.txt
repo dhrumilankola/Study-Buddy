@@ -8,40 +8,40 @@ transformers>=4.41.0,<5.0.0
 sentence-transformers==3.3.1
 
 # Web Framework & API
-fastapi
-uvicorn
-python-multipart
-starlette
-websockets
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart==0.0.19
+starlette>=0.36.0
+aiofiles>=23.2.0
 
-# Frontend
-streamlit
+# Database & Vector Store
+chromadb>=0.4.0
+langchain-core>=0.1.0
+langchain-community>=0.0.10
+langchain-chroma>=0.0.5
 
-# Database & Storage
-chromadb
-lancedb
-redis
+# LLM Integrations
+langchain-ollama>=0.0.3
+langchain-google-genai>=0.0.5
 
-# Retrieval-Augmented Generation (RAG) & LLMs
-langchain
-langchain-community
-langchain-core
-langchain-ollama
-langchain-huggingface
-ollama
+# Embedding Models
+sentence-transformers>=2.2.2
 
 # File Processing
-python-pptx
-PyPDF2
-nbformat
-beautifulsoup4
-aiofiles
+python-pptx>=0.6.21
+PyPDF2>=3.0.0
+nbformat>=5.9.2
+beautifulsoup4>=4.12.0
 
 # Utilities
-python-dotenv
-tqdm
-numpy
-pandas
+python-dotenv>=1.0.0
+numpy>=1.24.0
+pydantic>=2.0.0
+pydantic-settings>=2.1.0
+
+# Optional: Development Tools
+pytest>=7.4.0  # For testing
+black>=23.12.0  # For code formatting
 
 # Logging and Debugging
 logging

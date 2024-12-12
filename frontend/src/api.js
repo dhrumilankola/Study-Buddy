@@ -9,6 +9,18 @@ const api = axios.create({
   },
 });
 
+export const switchModel = async (provider) => {
+    try {
+      const response = await api.post('/model/switch', {
+        provider: provider,
+        temperature: 0.7, // Using default temperature
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.detail || 'Error switching model provider');
+    }
+  };
+
 export const uploadDocument = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
@@ -43,7 +55,7 @@ export const listDocuments = async () => {
   }
 };
 
-export const queryDocuments = async (question, contextWindow = 3) => {
+export const queryDocuments = async (question, contextWindow = 3, modelProvider = null) => {
     try {
       const response = await fetch(`${API_BASE_URL}/query/`, {
         method: 'POST',
@@ -52,7 +64,8 @@ export const queryDocuments = async (question, contextWindow = 3) => {
         },
         body: JSON.stringify({
           question: question,
-          context_window: contextWindow
+          context_window: contextWindow,
+          model_provider: modelProvider
         })
       });
   
@@ -60,36 +73,7 @@ export const queryDocuments = async (question, contextWindow = 3) => {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
   
-      // Create a readable stream from the response
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-  
-      return {
-        async *[Symbol.asyncIterator]() {
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              
-              const chunk = decoder.decode(value);
-              const lines = chunk.split('\n');
-              
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  try {
-                    const data = JSON.parse(line.slice(6));
-                    yield data;
-                  } catch (e) {
-                    console.error('Error parsing SSE data:', e);
-                  }
-                }
-              }
-            }
-          } finally {
-            reader.releaseLock();
-          }
-        }
-      };
+      return response; // Return the response directly for streaming
     } catch (error) {
       throw new Error(error.message || 'Error querying documents');
     }
