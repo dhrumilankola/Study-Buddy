@@ -52,3 +52,5 @@ dist/
 *.idea/
 *.vscode/
 *.iml
+
+human_testing
