@@ -77,7 +77,7 @@ The frontend provides an interactive interface for users to upload documents, vi
    ```
 4. Run the backend server:
    ```bash
-   python main.py
+   uvicorn main:app --host 0.0.0.0 --port 8000
    ```
 
 ### Frontend
