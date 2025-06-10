@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from typing import List, Optional, Dict, Any
 import os
@@ -6,10 +6,15 @@ import uuid
 from datetime import datetime
 import aiofiles
 import asyncio
+import json # Added for parsing RAG response
 from app.models.schemas import Document, QueryRequest, LLMConfig
 from app.services.rag_service import EnhancedRAGService
 from app.config import settings
 import logging
+from hume import AuthClient, EviClient # Added EviClient
+# Remove TranscriptionConfig as it's not used for EVI based on current understanding
+# from hume.models.config import TranscriptionConfig
+from hume.models.messages import UserInputMessage, AudioOutput, SessionInfoMessage, AssistantMessage, ErrorMessage # Added EVI message types
 
 logger = logging.getLogger(__name__)
 
@@ -311,3 +316,194 @@ async def get_document_text(filename: str):
             status_code=500,
             detail=f"Error getting document text: {str(e)}"
         )
+
+@router.get("/generate-hume-token")
+async def generate_hume_token():
+    """Generate a Hume API access token"""
+    if not settings.HUME_API_KEY or not settings.HUME_SECRET_KEY:
+        logger.error("Hume API key or secret key not configured.")
+        raise HTTPException(
+            status_code=500,
+            detail="Hume API credentials are not configured on the server."
+        )
+
+    try:
+        client = AuthClient(settings.HUME_API_KEY, settings.HUME_SECRET_KEY)
+        access_token = client.get_access_token()
+        return {"access_token": access_token}
+    except Exception as e:
+        logger.error(f"Error generating Hume token: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate Hume access token: {str(e)}"
+        )
+
+@router.websocket("/ws/voice-chat")
+async def websocket_voice_chat(client_ws: WebSocket):
+    await client_ws.accept()
+    logger.info("Client WebSocket connection accepted.")
+
+    if not settings.HUME_API_KEY:
+        logger.error("Hume API key not configured for WebSocket.")
+        await client_ws.close(code=1008, reason="HUME_API_KEY is not configured on the server.")
+        return
+
+    evi_client = EviClient(api_key=settings.HUME_API_KEY)
+
+    # Use a placeholder for config_id if you support multiple EVI configurations later
+    # For now, using default or None
+    config_id: Optional[str] = None
+    # If you have a specific EVI config ID, you can set it here:
+    # config_id = "your-evi-config-id"
+
+
+    try:
+        async with evi_client.connect(config_id=config_id) as session:
+            logger.info(f"Connected to Hume EVI session (config_id: {config_id if config_id else 'default'}).")
+            await client_ws.send_text(json.dumps({"type": "system", "message": "Connected to Hume EVI."}))
+
+            async def client_to_hume_task():
+                """Receives audio from client and forwards to Hume EVI."""
+                try:
+                    while True:
+                        data = await client_ws.receive()
+                        if "bytes" in data:
+                            audio_bytes = data["bytes"]
+                            logger.debug(f"Received {len(audio_bytes)} audio bytes from client. Sending to Hume EVI.")
+                            await session.send_audio_input(audio_bytes)
+                        elif "text" in data:
+                            text_data = data["text"]
+                            logger.info(f"Received text from client: {text_data}. (Note: EVI primarily expects audio input or specific commands)")
+                            # Potentially handle text commands to EVI if your EVI config supports them
+                            # For now, we log it. If it's a start/stop signal, implement here.
+                            # Example: if json.loads(text_data).get("command") == "stop_session":
+                            #    await session.close()
+                            #    break
+                except WebSocketDisconnect:
+                    logger.info("Client WebSocket disconnected.")
+                except Exception as e:
+                    logger.error(f"Error in client_to_hume_task: {e}", exc_info=True)
+                finally:
+                    logger.info("client_to_hume_task finished.")
+                    # Consider closing EVI session if client disconnects abruptly
+                    if not session.is_closed:
+                         await session.close()
+
+
+            async def hume_to_client_and_rag_task():
+                """Receives messages from Hume EVI, processes transcriptions with RAG, and forwards audio to client."""
+                try:
+                    async for message in session.stream_output():
+                        if isinstance(message, UserInputMessage):
+                            user_input = message.message.message
+                            logger.info(f"Hume EVI UserInputMessage (transcription): {user_input}")
+
+                            if not user_input or user_input.strip() == "":
+                                logger.info("Received empty transcription, skipping RAG.")
+                                continue
+
+                            await client_ws.send_text(json.dumps({"type": "transcription", "text": user_input}))
+
+                            full_rag_response = ""
+                            try:
+                                logger.info(f"Sending to RAG: '{user_input}'")
+                                async for rag_chunk_str in rag_service.generate_response(QueryRequest(question=user_input, context_window=settings.DEFAULT_CONTEXT_WINDOW)):
+                                    if rag_chunk_str.startswith("data: "):
+                                        data_json_str = rag_chunk_str[len("data: "):].strip()
+                                        try:
+                                            data_json = json.loads(data_json_str)
+                                            if data_json.get("type") == "response":
+                                                chunk_content = data_json.get("content", "")
+                                                full_rag_response += chunk_content
+                                                # Optionally send RAG chunks to client for real-time display
+                                                # await client_ws.send_text(json.dumps({"type": "rag_chunk", "content": chunk_content}))
+                                            elif data_json.get("type") == "sources":
+                                                # Optionally send sources to client
+                                                # await client_ws.send_text(json.dumps({"type": "rag_sources", "sources": data_json.get("sources")}))
+                                                pass
+                                            elif data_json.get("type") == "done":
+                                                logger.info("RAG processing done.")
+                                                break
+                                        except json.JSONDecodeError:
+                                            logger.error(f"Failed to parse RAG JSON chunk: {data_json_str}")
+                                    elif "DONE" in rag_chunk_str: # Check for explicit DONE message if not JSON
+                                        logger.info("RAG processing explicitly done.")
+                                        break
+
+                                logger.info(f"Full RAG response: {full_rag_response}")
+                                if full_rag_response.strip():
+                                    await client_ws.send_text(json.dumps({"type": "rag_response", "text": full_rag_response}))
+                                    logger.info(f"Sending full RAG response to Hume EVI for synthesis: {full_rag_response}")
+                                    await session.send_custom_assistant_message(full_rag_response)
+                                else:
+                                    logger.info("RAG response was empty. Not sending to EVI for synthesis.")
+                                    # Optionally send a default message or silence if EVI expects a response
+                                    # await session.send_custom_assistant_message("I don't have a response for that.")
+
+                            except Exception as e:
+                                logger.error(f"Error during RAG processing or sending to EVI: {e}", exc_info=True)
+                                await client_ws.send_text(json.dumps({"type": "error", "source": "rag", "message": str(e)}))
+
+
+                        elif isinstance(message, AudioOutput):
+                            audio_bytes = message.data
+                            logger.debug(f"Hume EVI AudioOutput: {len(audio_bytes)} bytes. Forwarding to client.")
+                            await client_ws.send_bytes(audio_bytes)
+
+                        elif isinstance(message, AssistantMessage):
+                             logger.info(f"Hume EVI AssistantMessage: {message.model_dump_json()}")
+                             # This might contain text from EVI's own LLM if not using send_custom_assistant_message
+                             # Or could be other control messages.
+
+                        elif isinstance(message, SessionInfoMessage):
+                            logger.info(f"Hume EVI SessionInfoMessage: {message.type}, {message.message}")
+                            # e.g. session_started, session_ended
+                            await client_ws.send_text(json.dumps({"type": "system", "sub_type": message.type, "message": message.message}))
+
+
+                        elif isinstance(message, ErrorMessage):
+                            logger.error(f"Hume EVI ErrorMessage: {message.error} - {message.message} (Code: {message.code})")
+                            await client_ws.send_text(json.dumps({"type": "error", "source": "hume_evi", "code": message.code, "message": message.message, "details": message.error}))
+
+                        else:
+                            logger.debug(f"Received other message type from Hume EVI: {type(message)}")
+
+                except WebSocketDisconnect:
+                    logger.info("Hume EVI WebSocket seems to have disconnected (client disconnected earlier or EVI ended session).")
+                except Exception as e:
+                    logger.error(f"Error in hume_to_client_and_rag_task: {e}", exc_info=True)
+                    if client_ws.client_state == client_ws.client_state.CONNECTED: # type: ignore
+                         await client_ws.send_text(json.dumps({"type": "error", "source": "hume_handler", "message": str(e)}))
+                finally:
+                    logger.info("hume_to_client_and_rag_task finished.")
+                    if not client_ws.client_state == client_ws.client_state.DISCONNECTED: # type: ignore
+                        await client_ws.close(code=1000, reason="Hume EVI session ended or error.")
+
+            # Run both tasks concurrently
+            # If one task finishes (e.g., client disconnects), the other should ideally be cancelled or stop.
+            # asyncio.gather will wait for both to complete. If one raises an exception, gather will raise it.
+            done, pending = await asyncio.wait(
+                [client_to_hume_task(), hume_to_client_and_rag_task()],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in pending:
+                task.cancel() # Request cancellation of still pending tasks
+
+            for task in done: # Check for exceptions in completed tasks
+                try:
+                    task.result()
+                except Exception as e:
+                    logger.error(f"Task completed with error: {e}", exc_info=True)
+
+
+    except WebSocketDisconnect:
+        logger.info("Client WebSocket disconnected before Hume EVI session could start or during setup.")
+    except Exception as e:
+        logger.error(f"Overall WebSocket voice chat error: {e}", exc_info=True)
+        if client_ws.client_state == client_ws.client_state.CONNECTED: # type: ignore
+            await client_ws.close(code=1011, reason=f"Server error: {str(e)}")
+    finally:
+        logger.info("WebSocket voice_chat endpoint handler finished.")
+        if client_ws.client_state == client_ws.client_state.CONNECTED: # type: ignore
+             await client_ws.close(code=1000, reason="Session normally ended.")

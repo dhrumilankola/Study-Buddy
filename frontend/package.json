@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@headlessui/react": "^2.2.0",
+    "@humeai/voice-react": "^0.1.22",
     "@tailwindcss/typography": "^0.5.15",
     "autoprefixer": "^10.4.20",
     "axios": "^1.7.9",

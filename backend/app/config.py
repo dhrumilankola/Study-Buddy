@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field
 import os
 from typing import List, Optional
 import logging
@@ -44,6 +45,10 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: Optional[str] = None
     GOOGLE_PROJECT_ID: Optional[str] = None
     GEMINI_MODEL: str = "gemini-1.5-pro"
+
+    # Hume AI settings
+    HUME_API_KEY: Optional[str] = Field(None, env="HUME_API_KEY")
+    HUME_SECRET_KEY: Optional[str] = Field(None, env="HUME_SECRET_KEY")
     
     # Document processing settings
     CHUNK_SIZE: int = 1000

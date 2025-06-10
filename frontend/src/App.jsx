@@ -4,9 +4,10 @@ import ChatInterface from './components/ChatInterface';
 import DocumentList from './components/DocumentList';
 import FileUpload from './components/FileUpload';
 import StatusIndicator from './components/StatusIndicator';
+import VoiceChatInterface from './components/VoiceChatInterface'; // Import VoiceChatInterface
 
 export default function App() {
-  const [currentView, setCurrentView] = useState('chat');
+  const [currentView, setCurrentView] = useState('chat'); // Default view
   const [showUpload, setShowUpload] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
@@ -75,6 +76,13 @@ export default function App() {
           <div className="space-y-6 animate-fade-in">
             <StatusIndicator />
             <DocumentList />
+          </div>
+        );
+      case 'voice_chat': // Add case for voice_chat
+        return (
+          <div className="space-y-6 animate-fade-in">
+            <StatusIndicator />
+            <VoiceChatInterface />
           </div>
         );
       default:

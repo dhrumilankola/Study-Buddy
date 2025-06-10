@@ -21,6 +21,24 @@ export const switchModel = async (provider) => {
     }
   };
 
+export const fetchHumeToken = async () => {
+  try {
+    // The endpoint /api/generate-hume-token is not under /api/v1, so construct URL accordingly
+    // Assuming the backend API is running on localhost:8000
+    const response = await fetch('http://localhost:8000/api/generate-hume-token');
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('Failed to fetch Hume token:', response.status, errorData);
+      throw new Error(`Failed to fetch Hume token: ${response.status} ${errorData}`);
+    }
+    const data = await response.json();
+    return data; // Should be { access_token: '...' }
+  } catch (error) {
+    console.error('Error in fetchHumeToken:', error);
+    throw error; // Re-throw the error for the caller to handle
+  }
+};
+
 export const uploadDocument = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
