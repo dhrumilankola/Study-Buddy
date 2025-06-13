@@ -23,6 +23,7 @@ class Document(BaseModel):
 
 class LLMConfig(BaseModel):
     """Configuration for the language model"""
+    provider: ModelProvider = Field(default=ModelProvider.OLLAMA)
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=1.0)
     top_p: Optional[float] = Field(default=0.95, ge=0.0, le=1.0)
     top_k: Optional[int] = Field(default=40, ge=0, le=100)

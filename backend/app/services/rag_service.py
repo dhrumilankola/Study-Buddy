@@ -14,14 +14,98 @@ from langchain.retrievers.document_compressors import DocumentCompressorPipeline
 from langchain.retrievers.document_compressors import LLMChainExtractor
 from langchain.chains.query_constructor.base import AttributeInfo
 from langchain.retrievers import SelfQueryRetriever
+from langchain_core.callbacks import BaseCallbackHandler
+import google.generativeai as genai
 import asyncio
 import logging
 import json
 import re
 from app.config import settings
+from app.utils.rate_limiter import async_rate_limited, gemini_limiter
 import time
 
 logger = logging.getLogger(__name__)
+
+class EnhancedTokenDebugHandler(BaseCallbackHandler):
+    """Enhanced callback handler for tracking token usage and rate limits."""
+
+    def __init__(self):
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.total_tokens_per_minute = 0
+        self.last_reset = time.time()
+        # Reduced limits for free tier - Gemini free tier has much lower limits
+        self.max_tokens_per_minute = 32000  # Conservative limit for free tier
+        self.max_requests_per_minute = 15   # Conservative request limit
+        self.request_count = 0
+
+        # Initialize Google AI SDK properly
+        if settings.GOOGLE_API_KEY:
+            genai.configure(api_key=settings.GOOGLE_API_KEY)
+
+    def _check_rate_limit(self):
+        """Reset token counter if a minute has passed"""
+        current_time = time.time()
+        if current_time - self.last_reset > 60:
+            self.total_tokens_per_minute = 0
+            self.request_count = 0
+            self.last_reset = current_time
+
+    def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any) -> None:
+        """Log token count when LLM starts processing."""
+        try:
+            self._check_rate_limit()
+            self.request_count += 1
+
+            # Check request rate limit
+            if self.request_count > self.max_requests_per_minute * 0.8:
+                logger.warning(f"Approaching request rate limit: {self.request_count}/{self.max_requests_per_minute}")
+
+            if isinstance(prompts[0], str) and settings.GOOGLE_API_KEY:
+                try:
+                    model = genai.GenerativeModel(settings.GEMINI_MODEL)
+                    token_count = model.count_tokens(prompts[0]).total_tokens
+                    self.input_tokens = token_count
+                    self.total_tokens_per_minute += token_count
+                    logger.info(f"Input tokens: {token_count} (Total this minute: {self.total_tokens_per_minute})")
+
+                    # Check if approaching limit
+                    if self.total_tokens_per_minute > self.max_tokens_per_minute * 0.8:
+                        logger.warning(f"Approaching token rate limit: {self.total_tokens_per_minute}/{self.max_tokens_per_minute}")
+                except Exception as token_error:
+                    logger.debug(f"Could not count input tokens: {str(token_error)}")
+                    # Estimate tokens (rough approximation: 1 token ≈ 4 characters)
+                    estimated_tokens = len(prompts[0]) // 4
+                    self.input_tokens = estimated_tokens
+                    self.total_tokens_per_minute += estimated_tokens
+                    logger.info(f"Estimated input tokens: {estimated_tokens}")
+        except Exception as e:
+            logger.error(f"Error in token tracking: {str(e)}")
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        """Log token count when LLM completes."""
+        try:
+            self._check_rate_limit()
+            if hasattr(response, 'generations') and response.generations and settings.GOOGLE_API_KEY:
+                try:
+                    text = response.generations[0][0].text
+                    model = genai.GenerativeModel(settings.GEMINI_MODEL)
+                    token_count = model.count_tokens(text).total_tokens
+                    self.output_tokens = token_count
+                    self.total_tokens_per_minute += token_count
+                    logger.info(f"Output tokens: {token_count} (Total this minute: {self.total_tokens_per_minute})")
+                    logger.info(f"Total tokens for this request: {self.input_tokens + self.output_tokens}")
+                except Exception as token_error:
+                    logger.debug(f"Could not count output tokens: {str(token_error)}")
+                    # Estimate tokens
+                    if hasattr(response, 'generations') and response.generations:
+                        text = response.generations[0][0].text
+                        estimated_tokens = len(text) // 4
+                        self.output_tokens = estimated_tokens
+                        self.total_tokens_per_minute += estimated_tokens
+                        logger.info(f"Estimated output tokens: {estimated_tokens}")
+        except Exception as e:
+            logger.error(f"Error in output token tracking: {str(e)}")
 
 class EnhancedRAGService:
     def __init__(self):
@@ -55,6 +139,9 @@ class EnhancedRAGService:
         try:
             # Initialize Gemini if API key is available
             if settings.GOOGLE_API_KEY:
+                # Initialize enhanced token debug handler
+                token_handler = EnhancedTokenDebugHandler()
+
                 self.gemini_model = ChatGoogleGenerativeAI(
                     model=settings.GEMINI_MODEL,
                     temperature=settings.MODEL_TEMPERATURE,
@@ -62,11 +149,13 @@ class EnhancedRAGService:
                     top_k=settings.MODEL_TOP_K,
                     max_output_tokens=settings.MODEL_MAX_TOKENS,
                     google_api_key=settings.GOOGLE_API_KEY,
-                    streaming=True
+                    streaming=True,
+                    callbacks=[token_handler]
                 )
                 logger.info(f"Gemini model initialized with: {settings.GEMINI_MODEL}")
         except Exception as e:
             logger.error(f"Error initializing Gemini model: {str(e)}", exc_info=True)
+            self.gemini_model = None
 
     async def process_document(self, document: Document, file_path: str) -> bool:
         """Process a document and add it to vector store"""
@@ -176,6 +265,7 @@ class EnhancedRAGService:
             logger.error(f"Error creating compression retriever: {str(e)}")
             return None
             
+    @async_rate_limited
     async def _extract_query_metadata(self, query: str) -> Dict[str, Any]:
         """Extract any file filters from the query"""
         try:
@@ -280,17 +370,65 @@ class EnhancedRAGService:
         try:
             provider = query.model_provider or self.current_provider
             logger.info(f"Starting generate_response with provider: {provider}")
-            
+
             # Apply custom model parameters if provided
-            if query.llm_config:  # Changed from model_config to llm_config
+            if query.llm_config:
                 logger.info(f"Custom LLM config applied: {query.llm_config}")
-                # Would apply custom parameters here
-                
-            # Perform hybrid search
-            search_results = await self._perform_hybrid_search(
-                query.question,
-                k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW
-            )
+
+            # Check if we're approaching rate limits for Gemini
+            if provider == "gemini":
+                # Check rate limiter status
+                if not gemini_limiter.can_make_call():
+                    wait_time = gemini_limiter.time_until_available()
+                    logger.warning(f"Gemini rate limit reached, switching to Ollama (would wait {wait_time:.2f}s)")
+                    yield self.format_sse({
+                        "type": "warning",
+                        "content": "Gemini API rate limit reached. Switching to local model."
+                    })
+                    provider = "ollama"
+                    self.current_provider = "ollama"
+                else:
+                    # Record the API call for rate limiting
+                    gemini_limiter.add_call()
+
+                # Also check token handler if available
+                if hasattr(self.gemini_model, "callbacks"):
+                    for callback in self.gemini_model.callbacks:
+                        if isinstance(callback, EnhancedTokenDebugHandler):
+                            if (callback.total_tokens_per_minute > callback.max_tokens_per_minute * 0.8 or
+                                callback.request_count > callback.max_requests_per_minute * 0.8):
+                                logger.warning("Approaching Gemini token/request limits, switching to Ollama")
+                                yield self.format_sse({
+                                    "type": "warning",
+                                    "content": "Approaching Gemini API limits. Switching to local model."
+                                })
+                                provider = "ollama"
+                                self.current_provider = "ollama"
+                                break
+                        
+            # Perform hybrid search with retry logic
+            try:
+                search_results = await self._perform_hybrid_search(
+                    query.question,
+                    k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW
+                )
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "rate limit" in error_str:
+                    logger.warning("Rate limit hit during search, switching to Ollama")
+                    yield self.format_sse({
+                        "type": "warning",
+                        "content": "Gemini API rate limit reached. Switching to local model."
+                    })
+                    provider = "ollama"
+                    # Retry with Ollama
+                    self.current_provider = "ollama"
+                    search_results = await self._perform_hybrid_search(
+                        query.question,
+                        k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW
+                    )
+                else:
+                    raise
             
             # Apply re-ranking
             search_results = self._re_rank_results(search_results, query.question)
@@ -304,19 +442,35 @@ class EnhancedRAGService:
                 })
                 return
 
-            # Format context with relevance scores
+            # Format context with relevance scores and token management
             context_parts = []
+            total_context_length = 0
+            max_context_length = 2000  # Very small limit for free tier
+
             for i, result in enumerate(search_results, 1):
                 content = result["content"]
                 score = result.get("score", "N/A")
                 metadata = result.get("metadata", {})
                 filename = metadata.get("filename", "Unknown")
                 logger.debug(f"Document {i} '{filename}' relevance score: {score}")
-                
+
+                # Truncate content if too long
+                if len(content) > 500:  # Much smaller chunks
+                    content = content[:500] + "..."
+
                 # Add source information to each chunk
-                context_parts.append(f"[Source: {filename} | Relevance: {score:.2f}]\n{content}")
-            
+                chunk_text = f"[Source: {filename} | Relevance: {score:.2f}]\n{content}"
+
+                # Check if adding this chunk would exceed our limit
+                if total_context_length + len(chunk_text) > max_context_length:
+                    logger.info(f"Context limit reached, using {len(context_parts)} out of {len(search_results)} documents")
+                    break
+
+                context_parts.append(chunk_text)
+                total_context_length += len(chunk_text)
+
             context = "\n\n---\n\n".join(context_parts)
+            logger.info(f"Final context length: {len(context)} characters")
             
             try:
                 model = self.get_current_model()
@@ -367,24 +521,71 @@ class EnhancedRAGService:
                 current_sentence = ""
                 buffer = ""
                 
-                async for chunk in chain.astream(query.question):
-                    buffer += chunk
-                    
-                    # Process complete sentences
-                    sentences = re.split(r'(?<=[.!?])\s+', buffer)
-                    
-                    if len(sentences) > 1:  # We have at least one complete sentence
-                        complete_sentences = sentences[:-1]  # All but the last (possibly incomplete) sentence
-                        buffer = sentences[-1]  # Keep the last incomplete sentence in buffer
-                        
-                        for sentence in complete_sentences:
-                            if sentence.strip():
-                                yield self.format_sse({
-                                    "type": "response",
-                                    "content": sentence.strip() + " ",
-                                    "provider": provider
-                                })
-                                await asyncio.sleep(0.05)  # Small delay for smoother streaming
+                try:
+                    async for chunk in chain.astream(query.question):
+                        buffer += chunk
+
+                        # Process complete sentences
+                        sentences = re.split(r'(?<=[.!?])\s+', buffer)
+
+                        if len(sentences) > 1:  # We have at least one complete sentence
+                            complete_sentences = sentences[:-1]  # All but the last (possibly incomplete) sentence
+                            buffer = sentences[-1]  # Keep the last incomplete sentence in buffer
+
+                            for sentence in complete_sentences:
+                                if sentence.strip():
+                                    yield self.format_sse({
+                                        "type": "response",
+                                        "content": sentence.strip() + " ",
+                                        "provider": provider
+                                    })
+                                    await asyncio.sleep(0.05)  # Small delay for smoother streaming
+                except Exception as stream_error:
+                    error_str = str(stream_error).lower()
+                    if ("429" in error_str or "rate limit" in error_str or
+                        "quota" in error_str or "resourceexhausted" in error_str):
+                        logger.warning(f"Rate limit error during streaming: {stream_error}")
+                        if provider == "gemini":
+                            yield self.format_sse({
+                                "type": "warning",
+                                "content": "Rate limit reached. Switching to local model for this response."
+                            })
+                            # Switch to Ollama and retry
+                            self.current_provider = "ollama"
+                            model = self.get_current_model()
+                            chain = (
+                                {
+                                    "context": lambda x: context,
+                                    "question": lambda x: x
+                                }
+                                | prompt
+                                | model
+                                | StrOutputParser()
+                            )
+                            # Retry with Ollama
+                            async for chunk in chain.astream(query.question):
+                                buffer += chunk
+                                sentences = re.split(r'(?<=[.!?])\s+', buffer)
+                                if len(sentences) > 1:
+                                    complete_sentences = sentences[:-1]
+                                    buffer = sentences[-1]
+                                    for sentence in complete_sentences:
+                                        if sentence.strip():
+                                            yield self.format_sse({
+                                                "type": "response",
+                                                "content": sentence.strip() + " ",
+                                                "provider": "ollama"
+                                            })
+                                            await asyncio.sleep(0.05)
+                        else:
+                            # Ollama also failed, return error message
+                            yield self.format_sse({
+                                "type": "error",
+                                "content": "Both Gemini and Ollama are unavailable. Please check your API quotas and ensure Ollama is running."
+                            })
+                            return
+                    else:
+                        raise stream_error
                 
                 # Send any remaining text in the buffer
                 if buffer.strip():
@@ -415,3 +616,7 @@ class EnhancedRAGService:
                 "type": "error",
                 "content": f"Error in RAG pipeline: {str(e)}"
             })
+
+
+
+

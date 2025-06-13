@@ -147,10 +147,12 @@ async def query_documents(query: QueryRequest):
         logger.info(f"Received query: '{query.question}' with context window: {query.context_window}")
         
         # Generate response stream
-        response_generator = rag_service.generate_response(query)
-        
+        async def response_generator():
+            async for chunk in rag_service.generate_response(query):
+                yield chunk
+
         return StreamingResponse(
-            response_generator,
+            response_generator(),
             media_type="text/event-stream",
             headers={
                 'Cache-Control': 'no-cache',
@@ -190,9 +192,15 @@ async def check_status():
         if os.path.exists(upload_dir):
             uploaded_files = [f for f in os.listdir(upload_dir) if os.path.isfile(os.path.join(upload_dir, f))]
             
+        # Check available providers
+        providers_available = {
+            "ollama": rag_service.ollama_model is not None,
+            "gemini": rag_service.gemini_model is not None and settings.GOOGLE_API_KEY is not None
+        }
+        
         # Get model information
         model_info = {
-            "name": settings.OLLAMA_MODEL,
+            "name": settings.GEMINI_MODEL if rag_service.current_provider == "gemini" else settings.OLLAMA_MODEL,
             "provider": rag_service.current_provider,
             "temperature": settings.MODEL_TEMPERATURE,
             "max_tokens": settings.MODEL_MAX_TOKENS
@@ -201,9 +209,12 @@ async def check_status():
         return {
             "status": "healthy",
             "documents_in_vector_store": doc_count,
+            "documents_indexed": doc_count,  # Add alias for frontend compatibility
             "uploaded_files_count": len(uploaded_files),
             "embedding_model": embedding_model,
             "llm_model": model_info,
+            "current_provider": rag_service.current_provider,
+            "providers_available": providers_available,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
@@ -211,6 +222,81 @@ async def check_status():
         raise HTTPException(
             status_code=500,
             detail=f"Error checking status: {str(e)}"
+        )
+
+@router.post("/test/gemini")
+async def test_gemini():
+    """Test Gemini API with minimal request"""
+    try:
+        if not rag_service.gemini_model:
+            raise HTTPException(
+                status_code=400,
+                detail="Gemini model not available"
+            )
+
+        # Simple test without context
+        from langchain_core.messages import HumanMessage
+
+        # Very simple message
+        messages = [HumanMessage(content="Hello")]
+
+        # Test the model
+        response = await rag_service.gemini_model.ainvoke(messages)
+
+        return {
+            "status": "success",
+            "message": "Gemini API is working",
+            "response": response.content[:100] + "..." if len(response.content) > 100 else response.content
+        }
+
+    except Exception as e:
+        logger.error(f"Gemini test failed: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@router.post("/model/switch")
+async def switch_model(model_config: LLMConfig):
+    """Switch between different model providers (Ollama/Gemini)"""
+    try:
+        # Validate provider
+        if model_config.provider.value not in ["ollama", "gemini"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid model provider. Must be either 'ollama' or 'gemini'"
+            )
+        
+        # Check if the requested provider is available
+        if model_config.provider.value == "gemini":
+            if not rag_service.gemini_model or not settings.GOOGLE_API_KEY:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Gemini model is not available. Please check your API key configuration."
+                )
+        elif model_config.provider.value == "ollama":
+            if not rag_service.ollama_model:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Ollama model is not available. Please check your Ollama installation."
+                )
+            
+        # Update the current provider in the RAG service
+        rag_service.current_provider = model_config.provider.value
+        
+        # Log the switch
+        logger.info(f"Switched model provider to: {model_config.provider.value}")
+        
+        return {
+            "status": "success",
+            "message": f"Successfully switched to {model_config.provider.value}",
+            "current_provider": rag_service.current_provider
+        }
+    except Exception as e:
+        logger.error(f"Error switching model: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error switching model: {str(e)}"
         )
         
 @router.delete("/documents/{filename}")

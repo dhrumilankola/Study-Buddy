@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 import os
 from typing import List, Optional
 import logging
+from pydantic import validator
 
 class Settings(BaseSettings):
     # API settings
@@ -21,20 +22,20 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: List[str] = ['.pdf', '.txt', '.pptx', '.ipynb']
     
     # Model settings
-    OLLAMA_MODEL: str = "gemma2:9b"  # Updated to use Gemma2:9b
-    DEFAULT_MODEL_PROVIDER: str = "ollama"  # Options: "ollama", "gemini"
+    OLLAMA_MODEL: str
+    DEFAULT_MODEL_PROVIDER: str
     
     # Embeddings settings
-    EMBEDDINGS_MODEL_TYPE: str = "sentence_transformer"  # Options: "sentence_transformer", "huggingface"
-    EMBEDDINGS_MODEL: str = "all-mpnet-base-v2"  # Stronger model than the previous one
-    EMBEDDINGS_DEVICE: str = "cpu"  # Options: "cpu", "cuda", "mps"
+    EMBEDDINGS_MODEL_TYPE: str = "sentence_transformer"
+    EMBEDDINGS_MODEL: str = "all-mpnet-base-v2"
+    EMBEDDINGS_DEVICE: str = "cpu"
     
     # Ollama settings
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    MODEL_TEMPERATURE: float = 0.7
-    MODEL_TOP_P: float = 0.95
-    MODEL_TOP_K: int = 40
-    MODEL_MAX_TOKENS: int = 1024
+    OLLAMA_BASE_URL: str
+    MODEL_TEMPERATURE: float
+    MODEL_TOP_P: float
+    MODEL_TOP_K: int
+    MODEL_MAX_TOKENS: int
     
     # Vector store settings
     VECTOR_STORE_COLLECTION_NAME: str = "study_buddy_docs"
@@ -43,32 +44,73 @@ class Settings(BaseSettings):
     # Google AI settings (for Gemini)
     GOOGLE_API_KEY: Optional[str] = None
     GOOGLE_PROJECT_ID: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-1.5-pro"
+    GEMINI_MODEL: str
     
     # Document processing settings
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     
     # RAG settings
-    DEFAULT_CONTEXT_WINDOW: int = 5
-    MAX_CONTEXT_WINDOW: int = 10
+    DEFAULT_CONTEXT_WINDOW: int = 1
+    MAX_CONTEXT_WINDOW: int = 2
     
     # Performance settings
     REQUEST_TIMEOUT: int = 60  # seconds
+
+    @validator("DEFAULT_MODEL_PROVIDER")
+    def validate_model_provider(cls, v):
+        if v not in ["ollama", "gemini"]:
+            raise ValueError("DEFAULT_MODEL_PROVIDER must be either 'ollama' or 'gemini'")
+        return v
+
+    @validator("GOOGLE_API_KEY")
+    def validate_api_key(cls, v, values):
+        if values.get("DEFAULT_MODEL_PROVIDER") == "gemini" and not v:
+            raise ValueError("GOOGLE_API_KEY is required when using Gemini provider")
+        return v
+
+    @validator("MODEL_TEMPERATURE")
+    def validate_temperature(cls, v):
+        if not 0 <= v <= 1:
+            raise ValueError("MODEL_TEMPERATURE must be between 0 and 1")
+        return v
+
+    @validator("MODEL_TOP_P")
+    def validate_top_p(cls, v):
+        if not 0 <= v <= 1:
+            raise ValueError("MODEL_TOP_P must be between 0 and 1")
+        return v
+
+    @validator("MODEL_TOP_K")
+    def validate_top_k(cls, v):
+        if not 1 <= v <= 100:
+            raise ValueError("MODEL_TOP_K must be between 1 and 100")
+        return v
     
     class Config:
         case_sensitive = True
         env_file = ".env"
+        env_file_encoding = "utf-8"
 
-# Create instance
-settings = Settings()
+try:
+    # Create instance
+    settings = Settings()
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-)
+    # Configure logging
+    logging.basicConfig(
+        level=getattr(logging, settings.LOG_LEVEL),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    )
 
-# Ensure required directories exist
-os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
+    # Log successful configuration
+    logging.info(f"Configuration loaded successfully")
+    logging.info(f"Using model provider: {settings.DEFAULT_MODEL_PROVIDER}")
+    logging.info(f"Model: {settings.GEMINI_MODEL if settings.DEFAULT_MODEL_PROVIDER == 'gemini' else settings.OLLAMA_MODEL}")
+
+    # Ensure required directories exist
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
+
+except Exception as e:
+    logging.error(f"Error loading configuration: {str(e)}")
+    raise
