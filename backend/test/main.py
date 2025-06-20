@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from app.routes import api
 from app.config import settings
+from app.database.connection import init_database, close_database
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -21,18 +22,33 @@ async def lifespan(app: FastAPI):
     # Create necessary directories
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
-    
+
+    # Initialize database
+    try:
+        await init_database()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {str(e)}")
+        logger.warning("Application will continue without database functionality")
+
     # Import here to initialize on startup
     from app.services.rag_service import EnhancedRAGService
     rag_service = EnhancedRAGService()
-    
+
     # Signal app is ready
     logger.info(f"{settings.PROJECT_NAME} started successfully")
-    
+
     yield
-    
+
     # Cleanup on shutdown
     logger.info(f"Shutting down {settings.PROJECT_NAME}")
+
+    # Close database connections
+    try:
+        await close_database()
+        logger.info("Database connections closed")
+    except Exception as e:
+        logger.error(f"Error closing database: {str(e)}")
 
 # Create FastAPI application
 app = FastAPI(

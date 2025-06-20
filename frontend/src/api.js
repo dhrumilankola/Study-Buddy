@@ -46,18 +46,44 @@ export const uploadDocument = async (file) => {
   }
 };
 
-export const listDocuments = async () => {
+export const listDocuments = async (limit = 50, offset = 0) => {
   try {
-    const response = await api.get('/documents/');
+    const response = await api.get('/documents/', {
+      params: { limit, offset }
+    });
     return response.data;
   } catch (error) {
     throw new Error(error.response?.data?.detail || 'Error fetching documents');
   }
 };
 
-export const queryDocuments = async (question, contextWindow = 3, modelProvider = null) => {
+export const getDocument = async (documentId) => {
+  try {
+    const response = await api.get(`/documents/${documentId}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error fetching document');
+  }
+};
+
+export const getDocumentStatus = async (documentId) => {
+  try {
+    const response = await api.get(`/documents/${documentId}/status`);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error fetching document status');
+  }
+};
+
+export const queryDocuments = async (question, contextWindow = 3, modelProvider = null, sessionUuid = null) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/query/`, {
+      // Build URL with session UUID if provided
+      let url = `${API_BASE_URL}/query/`;
+      if (sessionUuid) {
+        url += `?session_uuid=${encodeURIComponent(sessionUuid)}`;
+      }
+
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -68,11 +94,11 @@ export const queryDocuments = async (question, contextWindow = 3, modelProvider 
           model_provider: modelProvider
         })
       });
-  
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-  
+
       return response; // Return the response directly for streaming
     } catch (error) {
       throw new Error(error.message || 'Error querying documents');
@@ -88,19 +114,120 @@ export const checkStatus = async () => {
   }
 };
 
-export const deleteDocument = async (filename) => {
+export const deleteDocument = async (documentId) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/documents/${encodeURIComponent(filename)}`, {
+      const response = await api.delete(`/documents/${documentId}`);
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.detail || 'Error deleting document');
+    }
+  };
+
+// Legacy function for backward compatibility
+export const deleteDocumentByFilename = async (filename) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/documents/by-filename/${encodeURIComponent(filename)}`, {
         method: 'DELETE',
       });
-      
+
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.detail || 'Error deleting document');
       }
-      
+
       return await response.json();
     } catch (error) {
       throw new Error(error.message || 'Error deleting document');
     }
   };
+
+// Chat Session Management API
+export const getChatSessions = async (limit = 20) => {
+  try {
+    const response = await api.get('/chat/sessions', {
+      params: { limit }
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error fetching chat sessions');
+  }
+};
+
+export const createChatSession = async (title = null, documentIds = [], modelProvider = null) => {
+  try {
+    const response = await api.post('/chat/sessions', {
+      title,
+      document_ids: documentIds,
+      model_provider: modelProvider
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error creating chat session');
+  }
+};
+
+export const getChatSession = async (sessionUuid) => {
+  try {
+    const response = await api.get(`/chat/sessions/${sessionUuid}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error fetching chat session');
+  }
+};
+
+export const updateChatSession = async (sessionUuid, title = null, documentIds = null) => {
+  try {
+    const updateData = {};
+    if (title !== null) updateData.title = title;
+    if (documentIds !== null) updateData.document_ids = documentIds;
+
+    const response = await api.put(`/chat/sessions/${sessionUuid}`, updateData);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error updating chat session');
+  }
+};
+
+export const deleteChatSession = async (sessionUuid) => {
+  try {
+    const response = await api.delete(`/chat/sessions/${sessionUuid}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error deleting chat session');
+  }
+};
+
+export const saveChatMessage = async (sessionUuid, messageContent, responseContent = null, modelProvider = null, tokenCount = null, processingTimeMs = null) => {
+  try {
+    const response = await api.post(`/chat/sessions/${sessionUuid}/messages`, {
+      message_content: messageContent,
+      response_content: responseContent,
+      model_provider: modelProvider,
+      token_count: tokenCount,
+      processing_time_ms: processingTimeMs
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error saving chat message');
+  }
+};
+
+export const getChatMessages = async (sessionUuid, limit = 50, offset = 0) => {
+  try {
+    const response = await api.get(`/chat/sessions/${sessionUuid}/messages`, {
+      params: { limit, offset }
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error fetching chat messages');
+  }
+};
+
+export const getAvailableDocuments = async () => {
+  try {
+    const response = await api.get('/chat/available-documents');
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error fetching available documents');
+  }
+};

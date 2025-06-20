@@ -45,7 +45,17 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: Optional[str] = None
     GOOGLE_PROJECT_ID: Optional[str] = None
     GEMINI_MODEL: str
-    
+
+    # Database settings
+    DATABASE_URL: str = "postgresql+asyncpg://study_buddy:study_buddy_password@localhost:5432/study_buddy_db"
+    DATABASE_HOST: str = "localhost"
+    DATABASE_PORT: int = 5432
+    DATABASE_NAME: str = "study_buddy_db"
+    DATABASE_USER: str = "study_buddy"
+    DATABASE_PASSWORD: str = "study_buddy_password"
+    DATABASE_POOL_SIZE: int = 10
+    DATABASE_MAX_OVERFLOW: int = 20
+
     # Document processing settings
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200

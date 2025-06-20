@@ -1,17 +1,30 @@
 import { useState, useEffect } from 'react';
-import { FileText, Trash2, Calendar, FileBox, Loader2, RefreshCw } from 'lucide-react';
+import { FileText, Trash2, Calendar, FileBox, Loader2, RefreshCw, CheckCircle2, AlertCircle, Clock, Plus, Check, Package, HardDrive, Eye } from 'lucide-react';
 import { listDocuments, deleteDocument } from '../api';
 
-export default function DocumentList() {
+export default function DocumentList({
+  documents: propDocuments,
+  onDocumentSelect,
+  selectedDocuments = [],
+  onRefresh,
+  showHeader = true,
+  selectionMode = false,
+  showDetailedView = true
+}) {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [deletingFiles, setDeletingFiles] = useState(new Set());
 
-
+  // Use prop documents if provided, otherwise fetch them
   useEffect(() => {
-    fetchDocuments();
-  }, []);
+    if (propDocuments) {
+      setDocuments(propDocuments);
+      setLoading(false);
+    } else {
+      fetchDocuments();
+    }
+  }, [propDocuments]);
 
   const fetchDocuments = async () => {
     try {
@@ -27,33 +40,40 @@ export default function DocumentList() {
     }
   };
 
-  const handleDelete = async (filename) => {
+  const handleDelete = async (document) => {
     // Ask for confirmation
-    if (!window.confirm(`Are you sure you want to delete ${filename}?`)) {
+    if (!window.confirm(`Are you sure you want to delete "${document.original_filename || document.filename}"?`)) {
       return;
     }
 
     try {
-      // Add file to deleting set
-      setDeletingFiles(prev => new Set(prev).add(filename));
-      
-      // Call delete API
-      await deleteDocument(filename);
-      
+      // Add document ID to deleting set
+      const docId = document.id || document.filename;
+      setDeletingFiles(prev => new Set(prev).add(docId));
+
+      // Call delete API with document ID
+      await deleteDocument(document.id);
+
       // Remove from documents list
-      setDocuments(prev => prev.filter(doc => doc.filename !== filename));
-      
+      setDocuments(prev => prev.filter(doc => doc.id !== document.id));
+
+      // Call onRefresh if provided
+      if (onRefresh) {
+        onRefresh();
+      }
+
       // Show success message (optional)
-      console.log(`Successfully deleted ${filename}`);
+      console.log(`Successfully deleted ${document.original_filename || document.filename}`);
     } catch (error) {
       console.error('Error deleting document:', error);
       // Show error message
-      setError(`Failed to delete ${filename}`);
+      setError(`Failed to delete ${document.original_filename || document.filename}`);
     } finally {
       // Remove from deleting set
+      const docId = document.id || document.filename;
       setDeletingFiles(prev => {
         const newSet = new Set(prev);
-        newSet.delete(filename);
+        newSet.delete(docId);
         return newSet;
       });
     }
@@ -65,6 +85,58 @@ export default function DocumentList() {
       month: 'short',
       day: 'numeric'
     });
+  };
+
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'indexed':
+        return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+      case 'processing':
+        return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />;
+      case 'error':
+      case 'failed':
+        return <AlertCircle className="h-4 w-4 text-red-500" />;
+      default:
+        return <Clock className="h-4 w-4 text-yellow-500" />;
+    }
+  };
+
+  const getStatusText = (status) => {
+    switch (status) {
+      case 'indexed':
+        return 'Ready';
+      case 'processing':
+        return 'Processing';
+      case 'error':
+      case 'failed':
+        return 'Error';
+      default:
+        return 'Pending';
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'indexed':
+        return 'text-green-600 bg-green-50';
+      case 'processing':
+        return 'text-blue-600 bg-blue-50';
+      case 'error':
+      case 'failed':
+        return 'text-red-600 bg-red-50';
+      default:
+        return 'text-yellow-600 bg-yellow-50';
+    }
+  };
+
+  const handleDocumentSelect = (document) => {
+    if (onDocumentSelect) {
+      onDocumentSelect(document);
+    }
+  };
+
+  const isDocumentSelected = (document) => {
+    return selectedDocuments.some(selected => selected.id === document.id);
   };
 
   const formatFileSize = (bytes) => {
@@ -127,57 +199,164 @@ export default function DocumentList() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Your Documents</h2>
-        <button
-          onClick={fetchDocuments}
-          className="inline-flex items-center space-x-1 rounded-md bg-secondary px-2 py-1 text-sm hover:bg-secondary/80"
-        >
-          <RefreshCw className="h-4 w-4" />
-          <span>Refresh</span>
-        </button>
-      </div>
+      {showHeader && (
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Your Documents</h2>
+          <button
+            onClick={onRefresh || fetchDocuments}
+            className="inline-flex items-center space-x-1 rounded-md bg-secondary px-2 py-1 text-sm hover:bg-secondary/80"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span>Refresh</span>
+          </button>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {documents.map((doc) => (
-          <div
-            key={doc.filename}
-            className="group relative rounded-lg border bg-card p-6 transition-all hover:shadow-md"
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex items-center space-x-3">
-                <div className="rounded-lg bg-primary/10 p-2">
-                  <FileText className="h-5 w-5 text-primary" />
-                </div>
-                <div>
-                  <h3 className="font-medium truncate max-w-[200px]" title={doc.filename}>
-                    {doc.filename}
-                  </h3>
-                  <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-                    <Calendar className="h-3 w-3" />
-                    <span>{formatDate(doc.upload_date)}</span>
+        {documents.map((doc) => {
+          const docId = doc.id || doc.filename;
+          const displayName = doc.original_filename || doc.filename;
+          const fileSize = doc.file_size || doc.size;
+          const uploadDate = doc.created_at || doc.upload_date;
+          const status = doc.processing_status || (doc.processed ? 'indexed' : 'processing');
+
+          const isSelected = isDocumentSelected(doc);
+          const isReady = status === 'indexed';
+
+          return (
+            <div
+              key={docId}
+              className={`group relative rounded-lg border bg-card transition-all hover:shadow-md ${
+                onDocumentSelect ? 'cursor-pointer' : ''
+              } ${
+                isSelected ? 'ring-2 ring-primary border-primary' : ''
+              } ${
+                !isReady && selectionMode ? 'opacity-60' : ''
+              }`}
+              onClick={() => {
+                if (onDocumentSelect && (!selectionMode || isReady)) {
+                  handleDocumentSelect(doc);
+                }
+              }}
+            >
+              <div className="p-6">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start space-x-3 flex-1 min-w-0">
+                    <div className={`rounded-lg p-2 ${
+                      isReady ? 'bg-green-100 text-green-600' :
+                      status === 'processing' ? 'bg-blue-100 text-blue-600' :
+                      'bg-red-100 text-red-600'
+                    }`}>
+                      <FileText className="h-5 w-5" />
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-medium truncate" title={displayName}>
+                        {displayName}
+                      </h3>
+
+                      {/* Document metadata */}
+                      <div className="flex items-center space-x-3 text-sm text-muted-foreground mt-1">
+                        <div className="flex items-center space-x-1">
+                          <Calendar className="h-3 w-3" />
+                          <span>{formatDate(uploadDate)}</span>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                          <HardDrive className="h-3 w-3" />
+                          <span>{formatFileSize(fileSize)}</span>
+                        </div>
+                        <span className="uppercase text-xs font-medium px-1.5 py-0.5 bg-muted rounded">
+                          {doc.file_type}
+                        </span>
+                      </div>
+
+                      {/* Status and chunk info */}
+                      <div className="flex items-center space-x-3 mt-2">
+                        <div className="flex items-center space-x-1">
+                          {getStatusIcon(status)}
+                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${getStatusColor(status)}`}>
+                            {getStatusText(status)}
+                          </span>
+                        </div>
+
+                        {doc.chunk_count > 0 && (
+                          <div className="flex items-center space-x-1 text-xs text-muted-foreground">
+                            <Package className="h-3 w-3" />
+                            <span>{doc.chunk_count} chunks</span>
+                          </div>
+                        )}
+
+                        {showDetailedView && doc.document_metadata && Object.keys(doc.document_metadata).length > 0 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // Could open a metadata viewer
+                            }}
+                            className="flex items-center space-x-1 text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            <Eye className="h-3 w-3" />
+                            <span>Details</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Processing status details */}
+                      {status === 'processing' && (
+                        <div className="mt-2">
+                          <div className="w-full bg-muted rounded-full h-1.5">
+                            <div className="bg-blue-500 h-1.5 rounded-full animate-pulse" style={{ width: '60%' }}></div>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">Processing document...</p>
+                        </div>
+                      )}
+
+                      {status === 'error' && (
+                        <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-600">
+                          Processing failed. Please try uploading again.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2 ml-4">
+                    {/* Selection indicator */}
+                    {onDocumentSelect && (
+                      <div className={`rounded-full p-1.5 transition-colors ${
+                        isSelected
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-secondary hover:bg-secondary/80'
+                      } ${
+                        !isReady && selectionMode ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}>
+                        {isSelected ? (
+                          <Check className="h-4 w-4" />
+                        ) : (
+                          <Plus className="h-4 w-4" />
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(doc);
+                      }}
+                      disabled={deletingFiles.has(docId)}
+                      className="rounded-md p-2 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 disabled:opacity-50"
+                      title="Delete document"
+                    >
+                      {deletingFiles.has(docId) ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-destructive" />
+                      ) : (
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      )}
+                    </button>
                   </div>
                 </div>
               </div>
-              
-              <button 
-                onClick={() => handleDelete(doc.filename)}
-                disabled={deletingFiles.has(doc.filename)}
-                className="rounded-md p-2 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 disabled:opacity-50"
-              >
-                {deletingFiles.has(doc.filename) ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-destructive" />
-                ) : (
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                )}
-              </button>
             </div>
-            
-            <div className="mt-4 text-xs text-muted-foreground">
-              {formatFileSize(doc.size)}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

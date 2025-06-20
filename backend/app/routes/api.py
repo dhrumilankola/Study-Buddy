@@ -6,9 +6,14 @@ import uuid
 from datetime import datetime
 import aiofiles
 import asyncio
-from app.models.schemas import Document, QueryRequest, LLMConfig
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.schemas import Document, QueryRequest, LLMConfig, DocumentResponse, ProcessingStatus
+from app.database.models import Document as DBDocument, ProcessingStatus as DBProcessingStatus
+from app.database.services import DocumentService
+from app.database.connection import get_db_session
 from app.services.rag_service import EnhancedRAGService
 from app.config import settings
+from app.routes import database, chat_management
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,20 +21,75 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 rag_service = EnhancedRAGService()
 
-async def process_document_background(document: Document, file_path: str):
-    """Background task to process document after upload"""
+# Include database routes
+router.include_router(database.router, prefix="/db", tags=["database"])
+
+# Include chat management routes
+router.include_router(chat_management.router, prefix="/chat", tags=["chat-management"])
+
+async def process_document_background(db_document: DBDocument, file_path: str):
+    """Background task to process document after upload with database status updates"""
+    from app.database.connection import get_db_session_context
+
     try:
-        success = await rag_service.process_document(document, file_path)
-        logger.info(f"Background processing complete for {document.filename}: {'Success' if success else 'Failed'}")
+        # Update status to processing
+        async with get_db_session_context() as db:
+            await DocumentService.update_document_status(
+                db, db_document.id, DBProcessingStatus.PROCESSING
+            )
+            await db.commit()
+
+        # Create schema document for RAG service
+        schema_document = Document(
+            id=str(db_document.id),  # Use database ID as string
+            filename=db_document.original_filename,
+            uuid_filename=db_document.uuid_filename,  # Include uuid_filename for metadata
+            file_type=db_document.file_type,
+            file_size=db_document.file_size,
+            upload_date=db_document.created_at,
+            processed=False
+        )
+
+        # Process document
+        success = await rag_service.process_document(schema_document, file_path)
+
+        # Update database status
+        async with get_db_session_context() as db:
+            new_status = DBProcessingStatus.INDEXED if success else DBProcessingStatus.ERROR
+            await DocumentService.update_document_status(db, db_document.id, new_status)
+
+            # Update chunk count if successful
+            if success:
+                # Get chunk count from vector store
+                chunk_count = await rag_service.vector_store_service.get_document_chunk_count(
+                    db_document.uuid_filename
+                )
+                await DocumentService.update_document_chunks(db, db_document.id, chunk_count)
+
+            await db.commit()
+
+        logger.info(f"Background processing complete for {db_document.original_filename}: {'Success' if success else 'Failed'}")
+
     except Exception as e:
-        logger.error(f"Error in background processing for {document.filename}: {str(e)}")
+        logger.error(f"Error in background processing for {db_document.original_filename}: {str(e)}")
+
+        # Update status to error
+        try:
+            async with get_db_session_context() as db:
+                await DocumentService.update_document_status(
+                    db, db_document.id, DBProcessingStatus.ERROR
+                )
+                await db.commit()
+        except Exception as db_error:
+            logger.error(f"Failed to update document status to error: {str(db_error)}")
 
 @router.post("/documents/")
 async def upload_documents(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db_session)
 ):
-    """Upload and process a document with background processing"""
+    """Upload and process a document with database integration and background processing"""
     try:
         # Validate file extension
         file_extension = os.path.splitext(file.filename)[1].lower()
@@ -39,46 +99,54 @@ async def upload_documents(
                 detail=f"Unsupported file type: {file_extension}. Allowed types: {', '.join(settings.ALLOWED_EXTENSIONS)}"
             )
 
-        # Create document record
-        doc_id = str(uuid.uuid4())
-        document = Document(
-            id=doc_id,
-            filename=file.filename,
-            file_type=file_extension[1:],
-            file_size=0,
-            upload_date=datetime.now(),
-            processed=False
-        )
-
-        # Ensure upload directory exists
-        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-
-        # Save file
-        file_path = os.path.join(settings.UPLOAD_DIR, f"{doc_id}{file_extension}")
+        # Read file content first to get size
         content = await file.read()
-        
+
         if len(content) > settings.MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
                 detail=f"File too large. Maximum size is {settings.MAX_FILE_SIZE/(1024*1024)}MB"
             )
-        
+
+        # Generate UUID for file storage
+        uuid_filename = str(uuid.uuid4())
+
+        # Create document record in database
+        db_document = await DocumentService.create_document(
+            db,
+            original_filename=file.filename,
+            file_type=file_extension[1:],  # Remove the dot
+            file_size=len(content),
+            uuid_filename=uuid_filename,
+            metadata={"upload_source": "api"}
+        )
+
+        # Ensure upload directory exists
+        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+
+        # Save file with UUID name
+        file_path = os.path.join(settings.UPLOAD_DIR, f"{uuid_filename}{file_extension}")
         async with aiofiles.open(file_path, 'wb') as out_file:
             await out_file.write(content)
-            document.file_size = len(content)
             logger.info(f"File saved: {file_path}")
 
-        # Schedule background processing to avoid blocking
-        background_tasks.add_task(process_document_background, document, file_path)
+        # Commit the database transaction
+        await db.commit()
+
+        # Schedule background processing
+        background_tasks.add_task(process_document_background, db_document, file_path)
 
         return {
             "status": "success",
             "message": "File uploaded successfully. Processing in background.",
             "document": {
-                "id": document.id,
-                "filename": document.filename,
-                "size": document.file_size,
-                "processed": False
+                "id": db_document.id,
+                "uuid_filename": db_document.uuid_filename,
+                "original_filename": db_document.original_filename,
+                "file_type": db_document.file_type,
+                "file_size": db_document.file_size,
+                "processing_status": db_document.processing_status.value,
+                "created_at": db_document.created_at.isoformat()
             }
         }
 
@@ -87,44 +155,46 @@ async def upload_documents(
         raise e
     except Exception as e:
         logger.error(f"Error in upload: {str(e)}")
+        await db.rollback()
         raise HTTPException(
             status_code=500,
             detail=f"Error uploading file: {str(e)}"
         )
 
 @router.get("/documents/")
-async def list_documents():
-    """List all documents with enhanced metadata"""
+async def list_documents(
+    limit: int = Query(default=50, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """List all documents from database with enhanced metadata"""
     try:
-        # Get list of files in upload directory
-        files = []
-        for filename in os.listdir(settings.UPLOAD_DIR):
-            file_path = os.path.join(settings.UPLOAD_DIR, filename)
-            if os.path.isfile(file_path):
-                # Get file stats
-                file_stats = os.stat(file_path)
-                
-                # Determine if processed by checking vector store
-                is_processed = False
-                try:
-                    # Extract the document ID from the filename
-                    doc_id = os.path.splitext(filename)[0]
-                    # Check if document exists in vector store using metadata filter
-                    doc_count = await rag_service.vector_store_service.get_document_count()
-                    is_processed = doc_count > 0
-                except Exception:
-                    # If checking vector store fails, assume not processed
-                    is_processed = False
-                
-                files.append({
-                    "id": os.path.splitext(filename)[0],
-                    "filename": filename,
-                    "size": file_stats.st_size,
-                    "upload_date": datetime.fromtimestamp(file_stats.st_ctime),
-                    "processed": is_processed,
-                    "file_type": os.path.splitext(filename)[1][1:] if os.path.splitext(filename)[1] else ""
-                })
-        return sorted(files, key=lambda x: x['upload_date'], reverse=True)
+        # Get documents from database
+        documents = await DocumentService.get_all_documents(db, limit=limit, offset=offset)
+
+        # Convert to response format
+        document_list = []
+        for doc in documents:
+            document_list.append({
+                "id": doc.id,
+                "uuid_filename": doc.uuid_filename,
+                "original_filename": doc.original_filename,
+                "file_type": doc.file_type,
+                "file_size": doc.file_size,
+                "processing_status": doc.processing_status.value,
+                "created_at": doc.created_at.isoformat(),
+                "updated_at": doc.updated_at.isoformat(),
+                "chunk_count": doc.chunk_count,
+                "document_metadata": doc.document_metadata,
+                # Legacy fields for frontend compatibility
+                "filename": f"{doc.uuid_filename}.{doc.file_type}",
+                "size": doc.file_size,
+                "upload_date": doc.created_at.isoformat(),
+                "processed": doc.processing_status == DBProcessingStatus.INDEXED
+            })
+
+        return document_list
+
     except Exception as e:
         logger.error(f"Error listing documents: {str(e)}")
         raise HTTPException(
@@ -132,9 +202,73 @@ async def list_documents():
             detail=f"Error listing documents: {str(e)}"
         )
 
+@router.get("/documents/{document_id}")
+async def get_document(document_id: int, db: AsyncSession = Depends(get_db_session)):
+    """Get a specific document by ID"""
+    try:
+        document = await DocumentService.get_document_by_id(db, document_id)
+        if not document:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document with ID {document_id} not found"
+            )
+
+        return {
+            "id": document.id,
+            "uuid_filename": document.uuid_filename,
+            "original_filename": document.original_filename,
+            "file_type": document.file_type,
+            "file_size": document.file_size,
+            "processing_status": document.processing_status.value,
+            "created_at": document.created_at.isoformat(),
+            "updated_at": document.updated_at.isoformat(),
+            "chunk_count": document.chunk_count,
+            "document_metadata": document.document_metadata
+        }
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error getting document: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting document: {str(e)}"
+        )
+
+@router.get("/documents/{document_id}/status")
+async def get_document_status(document_id: int, db: AsyncSession = Depends(get_db_session)):
+    """Get the processing status of a specific document"""
+    try:
+        document = await DocumentService.get_document_by_id(db, document_id)
+        if not document:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document with ID {document_id} not found"
+            )
+
+        return {
+            "id": document.id,
+            "original_filename": document.original_filename,
+            "processing_status": document.processing_status.value,
+            "chunk_count": document.chunk_count,
+            "updated_at": document.updated_at.isoformat()
+        }
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error getting document status: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting document status: {str(e)}"
+        )
+
 @router.post("/query/")
-async def query_documents(query: QueryRequest):
-    """Query processed documents and get AI response with enhanced parameters"""
+async def query_documents(
+    query: QueryRequest,
+    session_uuid: Optional[str] = Query(None, description="Chat session UUID for document context filtering")
+):
+    """Query processed documents and get AI response with enhanced parameters and optional session context"""
     try:
         # Validate context window size
         if query.context_window is not None:
@@ -142,13 +276,15 @@ async def query_documents(query: QueryRequest):
                 query.context_window = 1
             elif query.context_window > settings.MAX_CONTEXT_WINDOW:
                 query.context_window = settings.MAX_CONTEXT_WINDOW
-        
+
         # Log query details
         logger.info(f"Received query: '{query.question}' with context window: {query.context_window}")
-        
+        if session_uuid:
+            logger.info(f"Using session context: {session_uuid}")
+
         # Generate response stream
         async def response_generator():
-            async for chunk in rag_service.generate_response(query):
+            async for chunk in rag_service.generate_response(query, session_uuid=session_uuid):
                 yield chunk
 
         return StreamingResponse(
@@ -299,48 +435,84 @@ async def switch_model(model_config: LLMConfig):
             detail=f"Error switching model: {str(e)}"
         )
         
-@router.delete("/documents/{filename}")
-async def delete_document(filename: str):
-    """Delete a document and its vector store entries with enhanced cleaning"""
+@router.delete("/documents/{document_id}")
+async def delete_document(document_id: int, db: AsyncSession = Depends(get_db_session)):
+    """Delete a document and its vector store entries with database integration"""
     try:
-        # Construct file path
-        file_path = os.path.join(settings.UPLOAD_DIR, filename)
-        
-        # Check if file exists
-        if not os.path.exists(file_path):
+        # Get document from database
+        document = await DocumentService.get_document_by_id(db, document_id)
+        if not document:
             raise HTTPException(
                 status_code=404,
-                detail=f"Document {filename} not found"
+                detail=f"Document with ID {document_id} not found"
             )
-            
-        # Delete the file
-        try:
-            os.remove(file_path)
-            logger.info(f"Deleted file: {file_path}")
-        except OSError as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error deleting file: {str(e)}"
-            )
-            
+
+        # Construct file path using UUID filename
+        file_path = os.path.join(settings.UPLOAD_DIR, f"{document.uuid_filename}.{document.file_type}")
+
+        # Delete the physical file if it exists
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Deleted file: {file_path}")
+            except OSError as e:
+                logger.error(f"Error deleting file: {str(e)}")
+                # Continue with database deletion even if file deletion fails
+        else:
+            logger.warning(f"Physical file not found: {file_path}")
+
         # Delete from vector store
         try:
-            # Filter documents with matching filename in metadata
-            await rag_service.vector_store_service.delete_by_metadata({"filename": filename})
-            logger.info(f"Removed document from vector store: {filename}")
+            await rag_service.vector_store_service.delete_by_metadata({
+                "uuid_filename": document.uuid_filename
+            })
+            logger.info(f"Removed document from vector store: {document.uuid_filename}")
         except Exception as e:
             logger.error(f"Error cleaning up vector store: {str(e)}")
-            # Don't raise error here as file is already deleted
-            
+            # Continue with database deletion even if vector store cleanup fails
+
+        # Delete from database
+        await DocumentService.delete_document(db, document_id)
+        await db.commit()
+
         return {
             "status": "success",
-            "message": f"Document {filename} deleted successfully"
+            "message": f"Document '{document.original_filename}' deleted successfully"
         }
-        
+
     except HTTPException as e:
         raise e
     except Exception as e:
         logger.error(f"Error processing delete request: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing delete request: {str(e)}"
+        )
+
+# Legacy endpoint for backward compatibility
+@router.delete("/documents/by-filename/{filename}")
+async def delete_document_by_filename(filename: str, db: AsyncSession = Depends(get_db_session)):
+    """Delete a document by filename (legacy endpoint for backward compatibility)"""
+    try:
+        # Extract UUID from filename (assuming format: uuid.extension)
+        uuid_filename = os.path.splitext(filename)[0]
+
+        # Find document by UUID filename
+        document = await DocumentService.get_document_by_uuid_filename(db, uuid_filename)
+        if not document:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document {filename} not found"
+            )
+
+        # Use the main delete endpoint
+        return await delete_document(document.id, db)
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error processing legacy delete request: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error processing delete request: {str(e)}"

@@ -1,14 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Bot, Cpu, User, MessagesSquare } from 'lucide-react';
-import { queryDocuments, switchModel } from '../api';
+import { queryDocuments, switchModel, saveChatMessage, getChatMessages } from '../api';
 
-export default function ChatInterface() {
+export default function ChatInterface({ sessionUuid }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
-  const [selectedModel, setSelectedModel] = useState('ollama');
+  const [selectedModel, setSelectedModel] = useState('gemini');
   const [switchingModel, setSwitchingModel] = useState(false);
 
   const scrollToBottom = () => {
@@ -18,6 +18,42 @@ export default function ChatInterface() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Load existing messages when component mounts or sessionUuid changes
+  useEffect(() => {
+    const loadMessages = async () => {
+      if (!sessionUuid) return;
+
+      try {
+        const existingMessages = await getChatMessages(sessionUuid);
+
+        // Convert database messages to frontend format
+        const formattedMessages = [];
+        for (const msg of existingMessages) {
+          // Add user message
+          formattedMessages.push({
+            type: 'user',
+            content: msg.message_content
+          });
+
+          // Add assistant response if it exists
+          if (msg.response_content) {
+            formattedMessages.push({
+              type: 'assistant',
+              content: msg.response_content,
+              model: msg.model_provider
+            });
+          }
+        }
+
+        setMessages(formattedMessages);
+      } catch (error) {
+        console.error('Error loading chat messages:', error);
+      }
+    };
+
+    loadMessages();
+  }, [sessionUuid]);
 
   const handleModelSwitch = async (provider) => {
     if (provider === selectedModel || isLoading || switchingModel) return;
@@ -43,15 +79,18 @@ export default function ChatInterface() {
 
     // Add user message
     setMessages(prev => [...prev, { type: 'user', content: question }]);
-    
+
+    const startTime = Date.now();
+    let messageSaved = false; // Track if we've already saved this message
+
     try {
       // Initialize assistant message
       let assistantMessage = '';
       setMessages(prev => [...prev, { type: 'assistant', content: '', loading: true }]);
 
       // Get streaming response
-      const response = await queryDocuments(question, 3, selectedModel);
-      
+      const response = await queryDocuments(question, 3, selectedModel, sessionUuid);
+
       // Set up text decoder
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -59,17 +98,17 @@ export default function ChatInterface() {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         // Decode the stream chunk
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n');
-        
+
         // Process each line
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-              
+
               if (data.type === 'error') {
                 setMessages(prev => [
                   ...prev.slice(0, -1),
@@ -80,14 +119,35 @@ export default function ChatInterface() {
                 assistantMessage += data.content;
                 setMessages(prev => [
                   ...prev.slice(0, -1),
-                  { 
-                    type: 'assistant', 
+                  {
+                    type: 'assistant',
                     content: assistantMessage,
-                    model: data.provider 
+                    model: data.provider
                   }
                 ]);
               } else if (data.type === 'done') {
-                // Optional: handle completion
+                // Save the complete conversation to database
+                console.log('Stream completed, saving message to database...');
+                if (sessionUuid && assistantMessage.trim() && !messageSaved) {
+                  const processingTime = Date.now() - startTime;
+                  console.log(`Saving message: "${question}" -> "${assistantMessage.trim().substring(0, 100)}..."`);
+                  try {
+                    const savedMessage = await saveChatMessage(
+                      sessionUuid,
+                      question,
+                      assistantMessage.trim(),
+                      selectedModel,
+                      null, // token_count - we don't track this yet
+                      processingTime
+                    );
+                    console.log('Message saved successfully:', savedMessage);
+                    messageSaved = true;
+                  } catch (saveError) {
+                    console.error('Error saving message to database:', saveError);
+                  }
+                } else {
+                  console.log('Not saving message - missing sessionUuid, empty assistant message, or already saved');
+                }
                 break;
               }
             } catch (e) {
@@ -96,6 +156,36 @@ export default function ChatInterface() {
           }
         }
       }
+
+      // Fallback: Save message even if stream didn't complete properly
+      if (sessionUuid && assistantMessage.trim() && !messageSaved) {
+        const processingTime = Date.now() - startTime;
+        console.log('Stream ended, attempting fallback save...');
+        console.log(`Fallback save data: sessionUuid=${sessionUuid}, question="${question}", assistantMessage="${assistantMessage.trim().substring(0, 100)}..."`);
+        try {
+          const savedMessage = await saveChatMessage(
+            sessionUuid,
+            question,
+            assistantMessage.trim(),
+            selectedModel,
+            null,
+            processingTime
+          );
+          console.log('Fallback save successful:', savedMessage);
+          messageSaved = true;
+        } catch (saveError) {
+          console.error('Error in fallback save:', saveError);
+        }
+      } else {
+        console.log('Skipping fallback save:', {
+          hasSessionUuid: !!sessionUuid,
+          hasAssistantMessage: !!assistantMessage.trim(),
+          alreadySaved: messageSaved,
+          sessionUuid,
+          assistantMessageLength: assistantMessage.length
+        });
+      }
+
     } catch (error) {
       console.error('Error:', error);
       setMessages(prev => [
@@ -144,8 +234,23 @@ export default function ChatInterface() {
     );
   };
 
+  // Show placeholder when no session is selected
+  if (!sessionUuid) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-lg border bg-card">
+        <div className="text-center">
+          <MessagesSquare className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+          <h3 className="text-lg font-medium text-foreground mb-2">No Chat Session Selected</h3>
+          <p className="text-muted-foreground mb-4">
+            Create a new chat session or select an existing one to start chatting.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-[calc(100vh-16rem)] flex-col rounded-lg border bg-card">
+    <div className="flex h-full flex-col rounded-lg border bg-card">
       {/* Model Selector */}
       <div className="border-b px-4 py-2">
         <div className="flex items-center justify-end space-x-2">

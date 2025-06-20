@@ -282,10 +282,10 @@ class EnhancedRAGService:
                 ("system", """You are a helpful assistant that extracts file filtering information from queries.
                 Extract any filters for filenames or file types that the user might be looking for.
                 Return a JSON with the following format:
-                {
+                {{
                     "filename": "filename to filter on (or null if not specified)",
                     "file_type": "file type to filter on (or null if not specified)"
-                }
+                }}
                 Only include filters that are explicitly mentioned."""),
                 ("human", "{query}")
             ])
@@ -314,12 +314,35 @@ class EnhancedRAGService:
             logger.error(f"Error extracting metadata from query: {str(e)}")
             return {}
     
-    async def _perform_hybrid_search(self, query: str, k: int = 5) -> List[Dict]:
+    async def _perform_hybrid_search(self, query: str, k: int = 5, session_document_filter: Optional[List[str]] = None) -> List[Dict]:
         """Perform a hybrid search combining semantic search with metadata filtering"""
         try:
-            # Extract metadata filters from query
-            metadata_filters = await self._extract_query_metadata(query)
-            
+            metadata_filters = None
+
+            # If session filtering is active, prioritize it and skip query metadata extraction
+            if session_document_filter:
+                logger.info(f"Using session document filter: {session_document_filter}")
+                metadata_filters = {}
+                # Filter by document UUIDs associated with the session
+                # Use uuid_filename which is the correct metadata field
+                if len(session_document_filter) == 1:
+                    metadata_filters["uuid_filename"] = session_document_filter[0]
+                else:
+                    # For multiple documents, we need to use $in operator if supported
+                    # For now, we'll handle this in the vector store service
+                    metadata_filters["uuid_filename"] = {"$in": session_document_filter}
+
+                logger.info(f"Applied session filter: {metadata_filters}")
+            else:
+                # Only extract query metadata if no session filter is provided
+                try:
+                    metadata_filters = await self._extract_query_metadata(query)
+                    if metadata_filters:
+                        logger.info(f"Extracted query metadata filters: {metadata_filters}")
+                except Exception as e:
+                    logger.warning(f"Failed to extract query metadata, proceeding without: {str(e)}")
+                    metadata_filters = None
+
             # Get semantic search results
             start_time = time.time()
             search_results = await self.vector_store_service.similarity_search(
@@ -327,8 +350,18 @@ class EnhancedRAGService:
                 k=k,
                 filter_dict=metadata_filters if metadata_filters else None
             )
-            logger.info(f"Semantic search completed in {time.time() - start_time:.2f}s")
-            
+            logger.info(f"Semantic search completed in {time.time() - start_time:.2f}s with {len(search_results)} results")
+
+            # Log which documents were found for debugging
+            if search_results:
+                found_docs = set()
+                for result in search_results:
+                    metadata = result.get("metadata", {})
+                    uuid_filename = metadata.get("uuid_filename", "Unknown")
+                    filename = metadata.get("filename", "Unknown")
+                    found_docs.add(f"{filename} ({uuid_filename})")
+                logger.info(f"Search found documents: {list(found_docs)}")
+
             return search_results
         except Exception as e:
             logger.error(f"Error in hybrid search: {str(e)}")
@@ -365,10 +398,46 @@ class EnhancedRAGService:
         # Sort by adjusted score
         return sorted(results, key=lambda x: x["score"], reverse=True)
 
-    async def generate_response(self, query: QueryRequest) -> AsyncGenerator[str, None]:
+    async def _get_session_document_filter(self, session_uuid: str) -> Optional[List[str]]:
+        """Get document UUIDs associated with a chat session"""
+        try:
+            from app.database.connection import AsyncSessionLocal
+            from app.database.services import ChatService
+
+            async with AsyncSessionLocal() as db_session:
+                # Get the chat session
+                chat_session = await ChatService.get_session_by_uuid(db_session, session_uuid)
+                if not chat_session:
+                    logger.warning(f"Chat session {session_uuid} not found")
+                    return None
+
+                # Get associated documents
+                documents = await ChatService.get_session_documents(db_session, chat_session.id)
+
+                if not documents:
+                    logger.info(f"No documents associated with session {session_uuid}")
+                    return None
+
+                # Return list of document UUIDs
+                document_uuids = [doc.uuid_filename for doc in documents]
+                logger.info(f"Session {session_uuid} has {len(document_uuids)} associated documents")
+                return document_uuids
+
+        except Exception as e:
+            logger.error(f"Error getting session document filter: {str(e)}")
+            return None
+
+    async def generate_response(self, query: QueryRequest, session_uuid: Optional[str] = None) -> AsyncGenerator[str, None]:
         """Generate streaming response for the query using advanced RAG techniques"""
         try:
-            provider = query.model_provider or self.current_provider
+            # Force Gemini provider since that's what the user has configured
+            provider = query.model_provider or "gemini"
+            if provider != "gemini":
+                logger.warning(f"Requested provider {provider} not available, using Gemini")
+                provider = "gemini"
+
+            # Update current provider to ensure consistency
+            self.current_provider = provider
             logger.info(f"Starting generate_response with provider: {provider}")
 
             # Apply custom model parameters if provided
@@ -380,16 +449,16 @@ class EnhancedRAGService:
                 # Check rate limiter status
                 if not gemini_limiter.can_make_call():
                     wait_time = gemini_limiter.time_until_available()
-                    logger.warning(f"Gemini rate limit reached, switching to Ollama (would wait {wait_time:.2f}s)")
+                    logger.warning(f"Gemini rate limit reached, waiting {wait_time:.2f}s")
                     yield self.format_sse({
                         "type": "warning",
-                        "content": "Gemini API rate limit reached. Switching to local model."
+                        "content": f"Gemini API rate limit reached. Please wait {wait_time:.1f} seconds before trying again."
                     })
-                    provider = "ollama"
-                    self.current_provider = "ollama"
-                else:
-                    # Record the API call for rate limiting
-                    gemini_limiter.add_call()
+                    # Wait for rate limit to reset instead of switching providers
+                    await asyncio.sleep(wait_time)
+
+                # Record the API call for rate limiting
+                gemini_limiter.add_call()
 
                 # Also check token handler if available
                 if hasattr(self.gemini_model, "callbacks"):
@@ -397,35 +466,40 @@ class EnhancedRAGService:
                         if isinstance(callback, EnhancedTokenDebugHandler):
                             if (callback.total_tokens_per_minute > callback.max_tokens_per_minute * 0.8 or
                                 callback.request_count > callback.max_requests_per_minute * 0.8):
-                                logger.warning("Approaching Gemini token/request limits, switching to Ollama")
+                                logger.warning("Approaching Gemini token/request limits, waiting before proceeding")
                                 yield self.format_sse({
                                     "type": "warning",
-                                    "content": "Approaching Gemini API limits. Switching to local model."
+                                    "content": "Approaching Gemini API limits. Slowing down requests."
                                 })
-                                provider = "ollama"
-                                self.current_provider = "ollama"
+                                await asyncio.sleep(2)  # Brief pause to avoid hitting limits
                                 break
                         
+            # Get session-specific document filter if session_uuid is provided
+            session_document_filter = None
+            if session_uuid:
+                session_document_filter = await self._get_session_document_filter(session_uuid)
+
             # Perform hybrid search with retry logic
             try:
                 search_results = await self._perform_hybrid_search(
                     query.question,
-                    k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW
+                    k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW,
+                    session_document_filter=session_document_filter
                 )
             except Exception as e:
                 error_str = str(e).lower()
                 if "429" in error_str or "rate limit" in error_str:
-                    logger.warning("Rate limit hit during search, switching to Ollama")
+                    logger.warning("Rate limit hit during search, waiting and retrying")
                     yield self.format_sse({
                         "type": "warning",
-                        "content": "Gemini API rate limit reached. Switching to local model."
+                        "content": "Rate limit reached during search. Waiting and retrying..."
                     })
-                    provider = "ollama"
-                    # Retry with Ollama
-                    self.current_provider = "ollama"
+                    # Wait and retry once
+                    await asyncio.sleep(5)
                     search_results = await self._perform_hybrid_search(
                         query.question,
-                        k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW
+                        k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW,
+                        session_document_filter=session_document_filter
                     )
                 else:
                     raise
@@ -545,45 +619,11 @@ class EnhancedRAGService:
                     if ("429" in error_str or "rate limit" in error_str or
                         "quota" in error_str or "resourceexhausted" in error_str):
                         logger.warning(f"Rate limit error during streaming: {stream_error}")
-                        if provider == "gemini":
-                            yield self.format_sse({
-                                "type": "warning",
-                                "content": "Rate limit reached. Switching to local model for this response."
-                            })
-                            # Switch to Ollama and retry
-                            self.current_provider = "ollama"
-                            model = self.get_current_model()
-                            chain = (
-                                {
-                                    "context": lambda x: context,
-                                    "question": lambda x: x
-                                }
-                                | prompt
-                                | model
-                                | StrOutputParser()
-                            )
-                            # Retry with Ollama
-                            async for chunk in chain.astream(query.question):
-                                buffer += chunk
-                                sentences = re.split(r'(?<=[.!?])\s+', buffer)
-                                if len(sentences) > 1:
-                                    complete_sentences = sentences[:-1]
-                                    buffer = sentences[-1]
-                                    for sentence in complete_sentences:
-                                        if sentence.strip():
-                                            yield self.format_sse({
-                                                "type": "response",
-                                                "content": sentence.strip() + " ",
-                                                "provider": "ollama"
-                                            })
-                                            await asyncio.sleep(0.05)
-                        else:
-                            # Ollama also failed, return error message
-                            yield self.format_sse({
-                                "type": "error",
-                                "content": "Both Gemini and Ollama are unavailable. Please check your API quotas and ensure Ollama is running."
-                            })
-                            return
+                        yield self.format_sse({
+                            "type": "error",
+                            "content": "Gemini API rate limit reached. Please wait a moment and try again."
+                        })
+                        return
                     else:
                         raise stream_error
                 

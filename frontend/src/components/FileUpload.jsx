@@ -43,33 +43,39 @@ export default function FileUpload() {
 
   const handleUpload = async () => {
     setUploading(true);
-    
+
     for (let fileObj of files) {
       if (fileObj.status === 'completed') continue;
-      
+
       try {
-        setFiles(prev => prev.map(f => 
-          f.file === fileObj.file 
+        setFiles(prev => prev.map(f =>
+          f.file === fileObj.file
             ? { ...f, status: 'uploading', progress: 0 }
             : f
         ));
 
-        await uploadDocument(fileObj.file);
+        const response = await uploadDocument(fileObj.file);
 
-        setFiles(prev => prev.map(f => 
-          f.file === fileObj.file 
-            ? { ...f, status: 'completed', progress: 100 }
+        setFiles(prev => prev.map(f =>
+          f.file === fileObj.file
+            ? {
+                ...f,
+                status: 'completed',
+                progress: 100,
+                documentId: response.document?.id,
+                processingStatus: response.document?.processing_status || 'processing'
+              }
             : f
         ));
       } catch (error) {
-        setFiles(prev => prev.map(f => 
-          f.file === fileObj.file 
+        setFiles(prev => prev.map(f =>
+          f.file === fileObj.file
             ? { ...f, status: 'error', error: error.message }
             : f
         ));
       }
     }
-    
+
     setUploading(false);
   };
 
@@ -120,10 +126,18 @@ export default function FileUpload() {
                   </div>
                   <div className="flex items-center space-x-2">
                     {fileObj.status === 'uploading' && (
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      <div className="flex items-center space-x-2">
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        <span className="text-xs text-muted-foreground">Uploading...</span>
+                      </div>
                     )}
                     {fileObj.status === 'completed' && (
-                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        <span className="text-xs text-green-600">
+                          {fileObj.processingStatus === 'processing' ? 'Processing...' : 'Ready'}
+                        </span>
+                      </div>
                     )}
                     {fileObj.status === 'error' && (
                       <div className="flex items-center space-x-1 text-destructive">

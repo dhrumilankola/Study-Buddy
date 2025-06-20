@@ -20,6 +20,12 @@ langchain-core>=0.1.15
 langchain-community>=0.0.20
 langchain-chroma>=0.0.5
 
+# PostgreSQL Database
+sqlalchemy>=2.0.23
+asyncpg>=0.29.0
+alembic>=1.13.1
+psycopg2-binary>=2.9.9
+
 # LLM Integrations
 langchain-ollama>=0.0.3
 langchain-google-genai>=0.0.10

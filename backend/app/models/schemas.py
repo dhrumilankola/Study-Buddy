@@ -12,6 +12,7 @@ class Document(BaseModel):
     """Document model with enhanced metadata"""
     id: str
     filename: str
+    uuid_filename: Optional[str] = None  # Add uuid_filename for proper vector store metadata
     file_type: str
     file_size: int
     upload_date: datetime
@@ -67,3 +68,81 @@ class DocumentTextResponse(BaseModel):
     filename: str
     chunk_count: int
     chunks: List[Dict[str, Any]]
+
+# Database response models
+class ProcessingStatus(str, Enum):
+    """Document processing status enumeration"""
+    PROCESSING = "processing"
+    INDEXED = "indexed"
+    ERROR = "error"
+    FAILED = "failed"
+
+class DocumentResponse(BaseModel):
+    """Database document response model"""
+    id: int
+    original_filename: str
+    uuid_filename: str
+    file_type: str
+    processing_status: ProcessingStatus
+    created_at: datetime
+    updated_at: datetime
+    file_size: int
+    chunk_count: int
+    document_metadata: Dict[str, Any]  # Renamed from 'metadata'
+
+    class Config:
+        from_attributes = True
+
+class ChatSessionResponse(BaseModel):
+    """Chat session response model"""
+    id: int
+    session_uuid: str
+    title: Optional[str]
+    created_at: datetime
+    last_activity: datetime
+    model_provider_used: Optional[ModelProvider]
+    total_messages: int
+    documents: Optional[List[DocumentResponse]] = None  # Include associated documents
+
+    class Config:
+        from_attributes = True
+
+class ChatMessageResponse(BaseModel):
+    """Chat message response model"""
+    id: int
+    session_id: int
+    message_content: str
+    response_content: Optional[str]
+    timestamp: datetime
+    model_provider: Optional[ModelProvider]
+    token_count: Optional[int]
+    processing_time_ms: Optional[int]
+
+    class Config:
+        from_attributes = True
+
+# Request models for chat session management
+class CreateChatSessionRequest(BaseModel):
+    """Request model for creating a new chat session"""
+    title: Optional[str] = None
+    document_ids: Optional[List[int]] = []
+    model_provider: Optional[ModelProvider] = None
+
+class UpdateChatSessionRequest(BaseModel):
+    """Request model for updating a chat session"""
+    title: Optional[str] = None
+    document_ids: Optional[List[int]] = None
+
+class ChatSessionWithDocumentsResponse(BaseModel):
+    """Extended chat session response with full document details"""
+    id: int
+    session_uuid: str
+    title: Optional[str]
+    created_at: datetime
+    last_activity: datetime
+    model_provider_used: Optional[ModelProvider]
+    total_messages: int
+    documents: List[DocumentResponse]
+
+    class Config:
+        from_attributes = True
