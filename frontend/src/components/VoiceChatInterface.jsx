@@ -1,184 +1,684 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { VoiceProvider, useVoice, ReadyState } from '@humeai/voice-react';
-import { fetchHumeToken } from '../api'; // Assuming api.js is in src/
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { VoiceProvider, useVoice } from '@humeai/voice-react';
+import { fetchHumeToken, createVoiceRagWebSocket } from '../api';
+import { 
+  Mic, 
+  MicOff, 
+  Volume2, 
+  VolumeX, 
+  AlertCircle, 
+  CheckCircle, 
+  Loader2,
+  RefreshCw,
+  WifiOff,
+  MessageCircle,
+  BookOpen
+} from 'lucide-react';
 
-const ChatControls = () => {
-  const { connect, disconnect, messages: humeMessages, readyState, sendCustomMessage, sendAudio } = useVoice();
+// Enhanced WebSocket ready state management
+const ReadyState = {
+  CONNECTING: 0,
+  OPEN: 1,
+  CLOSING: 2,
+  CLOSED: 3,
+};
+
+// Connection retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelay: 1000,
+  maxDelay: 5000,
+  backoffFactor: 2,
+};
+
+const VoiceChatControls = ({ onTranscriptionReceived, onError, isAuthenticated }) => {
+  const { connect, disconnect, messages, readyState, sendCustomMessage } = useVoice();
   const [chatMessages, setChatMessages] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [ragWebSocket, setRagWebSocket] = useState(null);
+  const [connectionAttempts, setConnectionAttempts] = useState(0);
+  const [lastError, setLastError] = useState(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [volume, setVolume] = useState(0.8);
+  
+  const messagesEndRef = useRef(null);
+  const retryTimeoutRef = useRef(null);
+  const ragWebSocketRef = useRef(null);
+  const connectionHealthRef = useRef(null);
+
+  // Auto-scroll to bottom when new messages arrive
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
 
   useEffect(() => {
-    // This effect processes messages received from the backend via the WebSocket,
-    // which are assumed to be available in humeMessages or via a custom message handling mechanism.
-    // The structure of humeMessages needs to be compatible with what our backend sends.
-    // Our backend sends JSON strings like:
-    // {"type": "transcription", "text": "..."}
-    // {"type": "rag_response", "text": "..."}
-    // {"type": "error", "source": "...", "message": "..."}
-    // {"type": "system", "sub_type": "...", "message": "..."}
+    scrollToBottom();
+  }, [chatMessages, scrollToBottom]);
 
-    if (humeMessages && humeMessages.length > 0) {
-      const latestHumeMessage = humeMessages[humeMessages.length - 1];
+  // Enhanced RAG WebSocket management with retry logic
+  const createRagWebSocketConnection = useCallback(() => {
+    if (ragWebSocketRef.current?.readyState === WebSocket.OPEN) {
+      return ragWebSocketRef.current;
+    }
 
-      // We need to determine how custom messages from our backend are structured within latestHumeMessage.
-      // Option 1: `latestHumeMessage.type === 'custom_message'` and `latestHumeMessage.message` is our JSON string or parsed object.
-      // Option 2: `latestHumeMessage.type === 'user_message'` or `assistant_message` and it contains our payload.
-      // For this implementation, we'll assume that `latestHumeMessage.type === 'custom_message'`
-      // and `latestHumeMessage.message` contains the JSON payload sent by the backend.
-      // This is a common pattern for SDKs that allow passthrough of custom data.
-
-      let processedMessage = null;
-
-      if (latestHumeMessage.type === 'custom_message' && latestHumeMessage.message) {
-        const customData = latestHumeMessage.message; // Assuming this is already a parsed object
-                                                     // If it's a string: const customData = JSON.parse(latestHumeMessage.message.content);
-
-        if (customData.type === 'transcription') {
-          processedMessage = { sender: 'User', text: customData.text, id: latestHumeMessage.id || Date.now() };
-        } else if (customData.type === 'rag_response') {
-          processedMessage = { sender: 'Assistant', text: customData.text, id: latestHumeMessage.id || Date.now() };
-        } else if (customData.type === 'error') {
-          processedMessage = { sender: 'System', text: `Error (${customData.source}): ${customData.message}`, id: latestHumeMessage.id || Date.now(), isError: true };
-        } else if (customData.type === 'system') {
-           processedMessage = { sender: 'System', text: `${customData.sub_type ? customData.sub_type + ': ' : ''}${customData.message}`, id: latestHumeMessage.id || Date.now() };
+    try {
+      const ws = createVoiceRagWebSocket();
+      
+      ws.onopen = () => {
+        console.log('RAG WebSocket connected successfully');
+        setRagWebSocket(ws);
+        ragWebSocketRef.current = ws;
+        setConnectionAttempts(0);
+        setLastError(null);
+        
+        // Send ping to verify connection
+        ws.send(JSON.stringify({ type: 'ping' }));
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleRagResponse(data);
+        } catch (error) {
+          console.error('Error parsing RAG WebSocket message:', error);
+          setLastError('Invalid response format from server');
         }
-      } else if (latestHumeMessage.type === 'user_message') {
-        // This would be if Hume SDK itself transcribes and gives a user message
-        // For our setup, backend sends transcription, so this might not be used directly for chat display unless backend is bypassed.
-        // processedMessage = { sender: 'User', text: latestHumeMessage.message.content, id: latestHumeMessage.id };
-      } else if (latestHumeMessage.type === 'assistant_message') {
-        // This would be if Hume SDK itself generates assistant text response
-        // For our setup, backend sends RAG response, so this might not be used directly.
-        // processedMessage = { sender: 'Assistant', text: latestHumeMessage.message.content, id: latestHumeMessage.id };
-      } else if (latestHumeMessage.type === 'error_message') {
-        // Error from Hume SDK itself
-        processedMessage = { sender: 'System', text: `Voice SDK Error: ${latestHumeMessage.message.content}`, id: latestHumeMessage.id, isError: true };
+      };
+      
+      ws.onclose = (event) => {
+        console.log('RAG WebSocket disconnected:', event.code, event.reason);
+        setRagWebSocket(null);
+        ragWebSocketRef.current = null;
+        
+        // Auto-reconnect if not manually closed
+        if (event.code !== 1000 && connectionAttempts < RETRY_CONFIG.maxRetries) {
+          scheduleReconnect();
+        }
+      };
+      
+      ws.onerror = (error) => {
+        console.error('RAG WebSocket error:', error);
+        setLastError('Connection error occurred');
+        
+        if (onError) {
+          onError('RAG WebSocket connection failed');
+        }
+      };
+      
+      return ws;
+    } catch (error) {
+      console.error('Failed to create RAG WebSocket:', error);
+      setLastError('Failed to establish connection');
+      return null;
+    }
+  }, [connectionAttempts, onError]);
+
+  // Intelligent reconnection with exponential backoff
+  const scheduleReconnect = useCallback(() => {
+    if (isRetrying || connectionAttempts >= RETRY_CONFIG.maxRetries) {
+      return;
+    }
+
+    setIsRetrying(true);
+    const delay = Math.min(
+      RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.backoffFactor, connectionAttempts),
+      RETRY_CONFIG.maxDelay
+    );
+
+    retryTimeoutRef.current = setTimeout(() => {
+      setConnectionAttempts(prev => prev + 1);
+      setIsRetrying(false);
+      createRagWebSocketConnection();
+    }, delay);
+  }, [connectionAttempts, isRetrying, createRagWebSocketConnection]);
+
+  // Initialize RAG WebSocket connection
+  useEffect(() => {
+    if (isAuthenticated) {
+      createRagWebSocketConnection();
+    }
+    
+    return () => {
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+      }
+      if (ragWebSocketRef.current?.readyState === WebSocket.OPEN) {
+        ragWebSocketRef.current.close(1000, 'Component unmounting');
+      }
+    };
+  }, [isAuthenticated, createRagWebSocketConnection]);
+
+  // Enhanced RAG response handling with better error recovery
+  const handleRagResponse = useCallback((data) => {
+    const { type, response, message, sources, original_question, error } = data;
+    
+    switch (type) {
+      case 'processing':
+        setIsProcessing(true);
+        setLastError(null);
+        break;
+        
+      case 'rag_response':
+        setIsProcessing(false);
+        setChatMessages(prev => [...prev, {
+          id: `rag-${Date.now()}`,
+          sender: 'Assistant',
+          text: response,
+          sources: sources || [],
+          timestamp: new Date(),
+          type: 'rag_response',
+          originalQuestion: original_question
+        }]);
+        setLastError(null);
+        break;
+        
+      case 'error':
+        setIsProcessing(false);
+        const errorMessage = error || message || 'An error occurred while processing your question.';
+        setChatMessages(prev => [...prev, {
+          id: `error-${Date.now()}`,
+          sender: 'System',
+          text: errorMessage,
+          timestamp: new Date(),
+          type: 'error',
+          isError: true
+        }]);
+        setLastError(errorMessage);
+        break;
+        
+      case 'pong':
+        // Health check response - connection is healthy
+        console.log('RAG WebSocket health check OK');
+        break;
+        
+      default:
+        console.log('Unknown RAG message type:', type, data);
+    }
+  }, []);
+
+  // Enhanced Hume EVI message processing
+  useEffect(() => {
+    if (messages && messages.length > 0) {
+      const latestMessage = messages[messages.length - 1];
+      
+      // Avoid processing duplicate messages
+      const existingMessage = chatMessages.find(msg => 
+        msg.id === latestMessage.id || 
+        (msg.text === latestMessage.message?.content && msg.type === latestMessage.type)
+      );
+      
+      if (existingMessage) {
+        return;
       }
 
-
-      if (processedMessage) {
-        setChatMessages(prevMessages => {
-          // Avoid duplicating the last message if IDs are available and match
-          if (prevMessages.length > 0 && processedMessage.id && prevMessages[prevMessages.length - 1].id === processedMessage.id) {
-            return prevMessages;
+      switch (latestMessage.type) {
+        case 'user_message':
+          const transcription = latestMessage.message?.content;
+          if (transcription && transcription.trim()) {
+            setChatMessages(prev => [...prev, {
+              id: latestMessage.id || `user-${Date.now()}`,
+              sender: 'You',
+              text: transcription,
+              timestamp: new Date(),
+              type: 'transcription'
+            }]);
+            
+            // Send to RAG system with retry logic
+            if (ragWebSocket && ragWebSocket.readyState === WebSocket.OPEN) {
+              try {
+                ragWebSocket.send(JSON.stringify({
+                  type: 'transcription',
+                  text: transcription,
+                  timestamp: new Date().toISOString()
+                }));
+              } catch (error) {
+                console.error('Failed to send transcription to RAG:', error);
+                setLastError('Failed to process transcription');
+              }
+            } else {
+              // Try to reconnect and resend
+              createRagWebSocketConnection();
+              setLastError('Connection lost, attempting to reconnect...');
+            }
+            
+            if (onTranscriptionReceived) {
+              onTranscriptionReceived(transcription);
+            }
           }
-          return [...prevMessages, processedMessage];
-        });
+          break;
+          
+        case 'assistant_message':
+          const assistantText = latestMessage.message?.content;
+          if (assistantText) {
+            setChatMessages(prev => [...prev, {
+              id: latestMessage.id || `assistant-${Date.now()}`,
+              sender: 'Voice Assistant',
+              text: assistantText,
+              timestamp: new Date(),
+              type: 'assistant_message'
+            }]);
+          }
+          break;
+          
+        case 'error':
+          const errorText = latestMessage.message?.content || 'Voice connection error';
+          setChatMessages(prev => [...prev, {
+            id: latestMessage.id || `voice-error-${Date.now()}`,
+            sender: 'System',
+            text: `Voice Error: ${errorText}`,
+            timestamp: new Date(),
+            type: 'error',
+            isError: true
+          }]);
+          setLastError(errorText);
+          break;
       }
     }
-  }, [humeMessages]);
+  }, [messages, ragWebSocket, chatMessages, onTranscriptionReceived, createRagWebSocketConnection]);
 
-  const handleConnect = useCallback(() => {
+  // Enhanced connection handling
+  const handleConnect = useCallback(async () => {
     if (readyState === ReadyState.OPEN) return;
-    setIsLoading(true);
-    connect()
-      .then(() => setIsLoading(false))
-      .catch(e => {
-        console.error("Connection error", e);
-        setChatMessages(prev => [...prev, {sender: 'System', text: `Connection failed: ${e.message}`, isError: true, id: Date.now()}]);
-        setIsLoading(false);
-      });
-  }, [connect, readyState]);
+    
+    try {
+      setLastError(null);
+      await connect();
+      setChatMessages(prev => [...prev, {
+        id: `system-${Date.now()}`,
+        sender: 'System',
+        text: '🎤 Voice chat connected! Start speaking to ask questions about your documents.',
+        timestamp: new Date(),
+        type: 'system'
+      }]);
+    } catch (error) {
+      console.error('Connection error:', error);
+      const errorMessage = `Failed to connect: ${error.message}`;
+      setLastError(errorMessage);
+      setChatMessages(prev => [...prev, {
+        id: `error-${Date.now()}`,
+        sender: 'System',
+        text: errorMessage,
+        timestamp: new Date(),
+        type: 'error',
+        isError: true
+      }]);
+      
+      if (onError) {
+        onError(errorMessage);
+      }
+    }
+  }, [connect, readyState, onError]);
 
-  const handleDisconnect = useCallback(() => {
-    setIsLoading(true);
-    disconnect()
-      .then(() => setIsLoading(false))
-      .catch(e => {
-        console.error("Disconnection error", e);
-        setIsLoading(false);
-      });
+  const handleDisconnect = useCallback(async () => {
+    try {
+      await disconnect();
+      setChatMessages(prev => [...prev, {
+        id: `system-${Date.now()}`,
+        sender: 'System',
+        text: 'Voice chat disconnected.',
+        timestamp: new Date(),
+        type: 'system'
+      }]);
+      setLastError(null);
+    } catch (error) {
+      console.error('Disconnection error:', error);
+    }
   }, [disconnect]);
 
+  // Manual retry function
+  const handleRetry = useCallback(() => {
+    setConnectionAttempts(0);
+    setLastError(null);
+    setIsRetrying(false);
+    
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+    }
+    
+    // Retry both voice and RAG connections
+    if (readyState === ReadyState.CLOSED) {
+      handleConnect();
+    }
+    
+    createRagWebSocketConnection();
+  }, [readyState, handleConnect, createRagWebSocketConnection]);
+
+  // Clear chat messages
+  const handleClearChat = useCallback(() => {
+    setChatMessages([]);
+    setLastError(null);
+  }, []);
+
+  // Connection status computation
+  const connectionStatus = useMemo(() => {
+    const voiceConnected = readyState === ReadyState.OPEN;
+    const ragConnected = ragWebSocket?.readyState === WebSocket.OPEN;
+    
+    if (voiceConnected && ragConnected) {
+      return { text: 'Connected', color: 'text-green-600', icon: CheckCircle };
+    } else if (readyState === ReadyState.CONNECTING || isRetrying) {
+      return { text: 'Connecting...', color: 'text-yellow-600', icon: Loader2 };
+    } else if (!voiceConnected && !ragConnected) {
+      return { text: 'Disconnected', color: 'text-red-600', icon: WifiOff };
+    } else {
+      return { text: 'Partial Connection', color: 'text-yellow-600', icon: AlertCircle };
+    }
+  }, [readyState, ragWebSocket, isRetrying]);
+
   const isConnected = readyState === ReadyState.OPEN;
-  const isConnecting = readyState === ReadyState.CONNECTING || isLoading;
+  const isConnecting = readyState === ReadyState.CONNECTING || isRetrying;
+  const StatusIcon = connectionStatus.icon;
 
   return (
-    <div style={{ padding: '20px', maxWidth: '600px', margin: '0 auto', fontFamily: 'Arial, sans-serif' }}>
-      <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <button onClick={handleConnect} disabled={isConnected || isConnecting}>
-          {isConnecting ? 'Connecting...' : (isConnected ? 'Connected' : 'Start Voice Chat')}
-        </button>
-        <button onClick={handleDisconnect} disabled={!isConnected || isConnecting}>
-          {isConnecting && !isConnected ? 'Cancelling...' : 'Stop Voice Chat'}
-        </button>
-      </div>
-      <div style={{ marginBottom: '10px', fontStyle: 'italic' }}>
-        Connection Status: {ReadyState[readyState]}
-      </div>
-      <div style={{ border: '1px solid #ccc', height: '300px', overflowY: 'auto', padding: '10px', marginBottom: '10px' }}>
-        {chatMessages.map((msg, index) => (
-          <div key={msg.id || index} style={{ marginBottom: '5px', color: msg.isError ? 'red' : 'inherit' }}>
-            <strong>{msg.sender}:</strong> {msg.text}
+    <div className="flex flex-col h-full bg-white rounded-lg shadow-lg">
+      {/* Enhanced Header with controls and status */}
+      <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={handleConnect}
+            disabled={isConnected || isConnecting}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+              isConnected || isConnecting
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg'
+            }`}
+          >
+            {isConnecting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Mic className="w-4 h-4" />
+            )}
+            <span>
+              {isConnecting ? 'Connecting...' : (isConnected ? 'Connected' : 'Start Voice Chat')}
+            </span>
+          </button>
+          
+          <button
+            onClick={handleDisconnect}
+            disabled={!isConnected || isConnecting}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+              !isConnected || isConnecting
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                : 'bg-red-600 text-white hover:bg-red-700 shadow-md hover:shadow-lg'
+            }`}
+          >
+            <MicOff className="w-4 h-4" />
+            <span>Stop</span>
+          </button>
+
+          {/* Retry button */}
+          {lastError && (
+            <button
+              onClick={handleRetry}
+              className="flex items-center space-x-2 px-3 py-2 rounded-lg font-medium bg-orange-600 text-white hover:bg-orange-700 transition-all duration-200"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Retry</span>
+            </button>
+          )}
+        </div>
+        
+        <div className="flex items-center space-x-4">
+          {/* Audio controls */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setAudioEnabled(!audioEnabled)}
+              className={`p-2 rounded-lg transition-colors ${
+                audioEnabled ? 'text-gray-600 hover:text-gray-800' : 'text-red-600'
+              }`}
+              title={audioEnabled ? 'Disable Audio' : 'Enable Audio'}
+            >
+              {audioEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            </button>
           </div>
-        ))}
+
+          {/* Connection status */}
+          <div className={`flex items-center space-x-2 ${connectionStatus.color}`}>
+            <StatusIcon className={`w-4 h-4 ${isConnecting ? 'animate-spin' : ''}`} />
+            <span className="text-sm font-medium">{connectionStatus.text}</span>
+          </div>
+
+          {/* Clear chat button */}
+          <button
+            onClick={handleClearChat}
+            className="p-2 text-gray-400 hover:text-gray-600 transition-colors"
+            title="Clear Chat History"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
       </div>
-      {/* Example of how to send audio if needed, though @humeai/voice-react typically handles mic internally */}
-      {/* <button onClick={() => sendAudio(new ArrayBuffer(0))}>Send Blank Audio (Test)</button> */}
-      {/* Example of how to send custom message if needed */}
-      {/* <button onClick={() => sendCustomMessage(JSON.stringify({ type: "client_event", content: "button_click" }))}>Send Custom Event</button> */}
+
+      {/* Error banner */}
+      {lastError && (
+        <div className="bg-red-50 border-b border-red-200 p-3">
+          <div className="flex items-center space-x-2 text-red-800">
+            <AlertCircle className="w-4 h-4" />
+            <span className="text-sm">{lastError}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Chat messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+        {chatMessages.length === 0 ? (
+          <div className="text-center py-8">
+            <MessageCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-600 mb-2">Ready to Chat</h3>
+            <p className="text-gray-500">
+              Connect your voice and start asking questions about your documents
+            </p>
+          </div>
+        ) : (
+          chatMessages.map((message) => (
+            <div
+              key={message.id}
+              className={`flex ${message.sender === 'You' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div
+                className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg shadow-sm ${
+                  message.sender === 'You'
+                    ? 'bg-blue-600 text-white'
+                    : message.isError
+                    ? 'bg-red-100 text-red-800 border border-red-200'
+                    : message.sender === 'System'
+                    ? 'bg-gray-100 text-gray-800'
+                    : 'bg-white text-gray-800 border border-gray-200'
+                }`}
+              >
+                <div className="flex items-start space-x-2">
+                  <div className="flex-1">
+                    <p className="text-sm leading-relaxed">{message.text}</p>
+                    
+                    {/* Sources display */}
+                    {message.sources && message.sources.length > 0 && (
+                      <div className="mt-3 pt-2 border-t border-gray-200">
+                        <div className="flex items-center space-x-1 mb-1">
+                          <BookOpen className="w-3 h-3 text-gray-500" />
+                          <p className="text-xs text-gray-600 font-medium">Sources:</p>
+                        </div>
+                        <div className="space-y-1">
+                          {message.sources.slice(0, 3).map((source, index) => (
+                            <div key={index} className="text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded">
+                              📄 {source.filename}
+                            </div>
+                          ))}
+                          {message.sources.length > 3 && (
+                            <div className="text-xs text-gray-500">
+                              +{message.sources.length - 3} more sources
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    
+                    <p className="text-xs text-gray-500 mt-2">
+                      {message.timestamp.toLocaleTimeString()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+        
+        {/* Processing indicator */}
+        {isProcessing && (
+          <div className="flex justify-start">
+            <div className="bg-white text-gray-800 px-4 py-3 rounded-lg shadow-sm border border-gray-200">
+              <div className="flex items-center space-x-3">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                <span className="text-sm">Searching your documents...</span>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        <div ref={messagesEndRef} />
+      </div>
     </div>
   );
 };
 
+// Enhanced main component with better state management
 const VoiceChatInterface = () => {
-  const [accessToken, setAccessToken] = useState(null);
+  const [authData, setAuthData] = useState(null);
   const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [retryCount, setRetryCount] = useState(0);
+
+  const initializeVoiceChat = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const tokenData = await fetchHumeToken();
+      
+      if (!tokenData.access_token) {
+        throw new Error('No access token received from server');
+      }
+      
+      setAuthData(tokenData);
+      setRetryCount(0);
+    } catch (err) {
+      console.error('Failed to initialize voice chat:', err);
+      const errorMessage = `Failed to initialize voice chat: ${err.message}`;
+      setError(errorMessage);
+      
+      // Auto-retry up to 3 times
+      if (retryCount < 3) {
+        setTimeout(() => {
+          setRetryCount(prev => prev + 1);
+          initializeVoiceChat();
+        }, 2000 * (retryCount + 1));
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [retryCount]);
 
   useEffect(() => {
-    fetchHumeToken()
-      .then(tokenResponse => {
-        if (tokenResponse && tokenResponse.access_token) {
-          setAccessToken(tokenResponse.access_token);
-        } else {
-          throw new Error("Access token not found in response");
-        }
-      })
-      .catch(err => {
-        console.error("Failed to fetch Hume token:", err);
-        setError(`Failed to load Hume token: ${err.message}. Voice chat will not be available.`);
-      });
+    initializeVoiceChat();
+  }, [initializeVoiceChat]);
+
+  const handleTranscriptionReceived = useCallback((transcription) => {
+    console.log('Transcription received:', transcription);
   }, []);
 
+  const handleError = useCallback((errorMessage) => {
+    setError(errorMessage);
+  }, []);
+
+  const handleRetry = useCallback(() => {
+    setRetryCount(0);
+    initializeVoiceChat();
+  }, [initializeVoiceChat]);
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 text-blue-600 mx-auto mb-4 animate-spin" />
+          <p className="text-gray-600 mb-2">Initializing voice chat...</p>
+          {retryCount > 0 && (
+            <p className="text-sm text-gray-500">Retry attempt {retryCount}/3</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
   if (error) {
-    return <div style={{ color: 'red', padding: '20px' }}>{error}</div>;
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center p-6 bg-red-50 rounded-lg border border-red-200 max-w-md">
+          <AlertCircle className="w-12 h-12 text-red-600 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-red-800 mb-2">Voice Chat Unavailable</h3>
+          <p className="text-red-600 mb-4 text-sm">{error}</p>
+          <div className="space-x-2">
+            <button
+              onClick={handleRetry}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
-  if (!accessToken) {
-    return <div style={{ padding: '20px' }}>Loading Hume AI session...</div>;
+  // Authentication check
+  if (!authData) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center p-6 bg-yellow-50 rounded-lg border border-yellow-200">
+          <AlertCircle className="w-12 h-12 text-yellow-600 mx-auto mb-4" />
+          <p className="text-yellow-800">Authentication data not available</p>
+          <button
+            onClick={handleRetry}
+            className="mt-3 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
+          >
+            Retry Authentication
+          </button>
+        </div>
+      </div>
+    );
   }
-
-  // Construct WebSocket URL from current window location
-  // Ensure to use wss:// if the main page is loaded over https://
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-  const wsUrl = `${wsProtocol}${window.location.hostname}:8000/ws/voice-chat`;
-  // For development, if frontend and backend are on different ports and backend is not on 8000:
-  // const wsUrl = `${wsProtocol}localhost:8000/ws/voice-chat`; // Or your specific backend port
 
   return (
-    <VoiceProvider
-      auth={{ type: 'accessToken', value: accessToken }}
-      configId={null} // Replace with your actual EVI configId if you have one
-      url={wsUrl}
-      onOpen={() => {
-        console.log('VoiceProvider: Connection opened');
-        // Can use this to update local state if needed, e.g. add a system message to chat
-      }}
-      onClose={(event) => {
-        console.log('VoiceProvider: Connection closed', event);
-      }}
-      onError={(errorData) => {
-        console.error('VoiceProvider: Error', errorData);
-        // This error is from the VoiceProvider itself (e.g. auth failure, WebSocket connection error before Hume SDK takes over)
-        // Child components using useVoice() will get more specific errors via ReadyState or messages.
-        // We could set a global error state here too.
-      }}
-      // The `onMessage` prop might be useful if `useVoice().messages` isn't sufficient
-      // for handling custom JSON messages from the backend.
-      // onMessage={(event) => console.log('Raw WS Message from VoiceProvider:', event.data)}
-    >
-      <ChatControls />
-    </VoiceProvider>
+    <div className="h-[500px] border border-gray-200 rounded-lg overflow-hidden shadow-lg">
+      <VoiceProvider
+        auth={{ type: 'accessToken', value: authData.access_token }}
+        configId={authData.config_id}
+        hostname={authData.hostname || 'api.hume.ai'}
+        onOpen={() => {
+          console.log('Hume EVI connection opened');
+        }}
+        onClose={(event) => {
+          console.log('Hume EVI connection closed:', event);
+        }}
+        onError={(error) => {
+          console.error('Hume EVI error:', error);
+          handleError(`Voice connection error: ${error.message || 'Unknown error'}`);
+        }}
+      >
+        <VoiceChatControls 
+          onTranscriptionReceived={handleTranscriptionReceived}
+          onError={handleError}
+          isAuthenticated={!!authData}
+        />
+      </VoiceProvider>
+    </div>
   );
 };
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, Database, Bot, Loader2, Cpu, Server } from 'lucide-react';
-import { checkStatus } from '../api';
+import { getStatus } from '../api';
 
 export default function StatusIndicator() {
   const [status, setStatus] = useState(null);
@@ -16,7 +16,7 @@ export default function StatusIndicator() {
   const fetchStatus = async () => {
     try {
       setLoading(true);
-      const data = await checkStatus();
+      const data = await getStatus();
       setStatus(data);
       setError(null);
     } catch (err) {
