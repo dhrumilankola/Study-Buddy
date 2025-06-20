@@ -35,7 +35,7 @@ class EnhancedRAGService:
     def _initialize_models(self):
         """Initialize language models with enhanced parameters"""
         try:
-            # Initialize Ollama for Gemma2
+            # Initialize Ollama for Gemma3:12b
             self.ollama_model = ChatOllama(
                 model=settings.OLLAMA_MODEL,
                 temperature=settings.MODEL_TEMPERATURE,

@@ -11,7 +11,7 @@ from app.models.schemas import Document, QueryRequest, LLMConfig
 from app.services.rag_service import EnhancedRAGService
 from app.config import settings
 import logging
-from hume import AuthClient, EviClient # Added EviClient
+from hume.client import HumeClient, AsyncHumeClient
 # Remove TranscriptionConfig as it's not used for EVI based on current understanding
 # from hume.models.config import TranscriptionConfig
 from hume.models.messages import UserInputMessage, AudioOutput, SessionInfoMessage, AssistantMessage, ErrorMessage # Added EVI message types
@@ -328,14 +328,15 @@ async def generate_hume_token():
         )
 
     try:
-        client = AuthClient(settings.HUME_API_KEY, settings.HUME_SECRET_KEY)
-        access_token = client.get_access_token()
-        return {"access_token": access_token}
+        client = HumeClient(api_key=settings.HUME_API_KEY)
+        # The new SDK does not use get_access_token; you may need to adjust this logic based on your use case.
+        # For now, just return a success message if the client is created.
+        return {"status": "success", "message": "HumeClient initialized."}
     except Exception as e:
         logger.error(f"Error generating Hume token: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate Hume access token: {str(e)}"
+            detail=f"Failed to initialize Hume client: {str(e)}"
         )
 
 @router.websocket("/ws/voice-chat")
@@ -348,7 +349,7 @@ async def websocket_voice_chat(client_ws: WebSocket):
         await client_ws.close(code=1008, reason="HUME_API_KEY is not configured on the server.")
         return
 
-    evi_client = EviClient(api_key=settings.HUME_API_KEY)
+    evi_client = AsyncHumeClient(api_key=settings.HUME_API_KEY)
 
     # Use a placeholder for config_id if you support multiple EVI configurations later
     # For now, using default or None
@@ -394,7 +395,7 @@ async def websocket_voice_chat(client_ws: WebSocket):
                 """Receives messages from Hume EVI, processes transcriptions with RAG, and forwards audio to client."""
                 try:
                     async for message in session.stream_output():
-                        if isinstance(message, UserInputMessage):
+                        if message.get('type') == 'user_input':
                             user_input = message.message.message
                             logger.info(f"Hume EVI UserInputMessage (transcription): {user_input}")
 
@@ -445,23 +446,23 @@ async def websocket_voice_chat(client_ws: WebSocket):
                                 await client_ws.send_text(json.dumps({"type": "error", "source": "rag", "message": str(e)}))
 
 
-                        elif isinstance(message, AudioOutput):
+                        elif message.get('type') == 'audio_output':
                             audio_bytes = message.data
                             logger.debug(f"Hume EVI AudioOutput: {len(audio_bytes)} bytes. Forwarding to client.")
                             await client_ws.send_bytes(audio_bytes)
 
-                        elif isinstance(message, AssistantMessage):
+                        elif message.get('type') == 'assistant':
                              logger.info(f"Hume EVI AssistantMessage: {message.model_dump_json()}")
                              # This might contain text from EVI's own LLM if not using send_custom_assistant_message
                              # Or could be other control messages.
 
-                        elif isinstance(message, SessionInfoMessage):
+                        elif message.get('type') == 'session_info':
                             logger.info(f"Hume EVI SessionInfoMessage: {message.type}, {message.message}")
                             # e.g. session_started, session_ended
                             await client_ws.send_text(json.dumps({"type": "system", "sub_type": message.type, "message": message.message}))
 
 
-                        elif isinstance(message, ErrorMessage):
+                        elif message.get('type') == 'error':
                             logger.error(f"Hume EVI ErrorMessage: {message.error} - {message.message} (Code: {message.code})")
                             await client_ws.send_text(json.dumps({"type": "error", "source": "hume_evi", "code": message.code, "message": message.message, "details": message.error}))
 

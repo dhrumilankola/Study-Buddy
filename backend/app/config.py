@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: List[str] = ['.pdf', '.txt', '.pptx', '.ipynb']
     
     # Model settings
-    OLLAMA_MODEL: str = "gemma2:9b"  # Updated to use Gemma2:9b
+    OLLAMA_MODEL: str = "gemma3:12b"  # Updated to use Gemma3:12b
     DEFAULT_MODEL_PROVIDER: str = "ollama"  # Options: "ollama", "gemini"
     
     # Embeddings settings

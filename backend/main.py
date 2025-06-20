@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup logic
     logger.info(f"Starting {settings.PROJECT_NAME}")
-    logger.info(f"Model: {settings.OLLAMA_MODEL}")
+    logger.info(f"Model: {settings.OLLAMA_MODEL}")  # Now using gemma3:12b
     logger.info(f"Embeddings: {settings.EMBEDDINGS_MODEL}")
     
     # Create necessary directories
