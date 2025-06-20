@@ -216,7 +216,8 @@ class EnhancedDocumentProcessor:
             processed_chunks = []
             for idx, text in enumerate(chunked_texts):
                 metadata = {
-                    "document_id": document.id,
+                    "document_id": document.id,  # Keep as string to match schema
+                    "uuid_filename": document.uuid_filename if hasattr(document, 'uuid_filename') and document.uuid_filename else f"{document.id}.{document.file_type}",
                     "filename": document.filename,
                     "chunk_index": idx,
                     "file_type": document.file_type,

@@ -151,9 +151,38 @@ class EnhancedVectorStoreService:
             
             # Perform search with optional filtering
             if filter_dict:
-                results = self._vector_store.similarity_search_with_score(
-                    query, k=k, filter=filter_dict
-                )
+                # Handle special case for multiple uuid_filename filtering
+                if "uuid_filename" in filter_dict and isinstance(filter_dict["uuid_filename"], dict):
+                    if "$in" in filter_dict["uuid_filename"]:
+                        # Handle multiple document filtering
+                        uuid_list = filter_dict["uuid_filename"]["$in"]
+                        all_results = []
+
+                        # Search for each document separately and combine results
+                        for uuid_filename in uuid_list:
+                            single_filter = {k: v for k, v in filter_dict.items() if k != "uuid_filename"}
+                            single_filter["uuid_filename"] = uuid_filename
+
+                            try:
+                                single_results = self._vector_store.similarity_search_with_score(
+                                    query, k=k, filter=single_filter
+                                )
+                                all_results.extend(single_results)
+                            except Exception as e:
+                                logger.warning(f"Error searching with filter {single_filter}: {e}")
+                                continue
+
+                        # Sort by score and take top k
+                        all_results.sort(key=lambda x: x[1])  # Sort by score (lower is better for distance)
+                        results = all_results[:k]
+                    else:
+                        results = self._vector_store.similarity_search_with_score(
+                            query, k=k, filter=filter_dict
+                        )
+                else:
+                    results = self._vector_store.similarity_search_with_score(
+                        query, k=k, filter=filter_dict
+                    )
             else:
                 results = self._vector_store.similarity_search_with_score(
                     query, k=k
@@ -211,9 +240,28 @@ class EnhancedVectorStoreService:
         try:
             if self._vector_store is None:
                 self._initialize_vector_store()
-                
+
             collection = self._vector_store._collection
             return collection.count()
         except Exception as e:
             logger.error(f"Error getting document count: {str(e)}")
+            return 0
+
+    async def get_document_chunk_count(self, uuid_filename: str) -> int:
+        """Get the number of chunks for a specific document by UUID filename"""
+        try:
+            if self._vector_store is None:
+                self._initialize_vector_store()
+
+            # Query the collection with metadata filter
+            collection = self._vector_store._collection
+            results = collection.get(
+                where={"uuid_filename": uuid_filename}
+            )
+
+            # Return the count of chunks for this document
+            return len(results['ids']) if results and 'ids' in results else 0
+
+        except Exception as e:
+            logger.error(f"Error getting document chunk count for {uuid_filename}: {str(e)}")
             return 0

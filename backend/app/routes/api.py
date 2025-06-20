@@ -1,406 +1,344 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
-from typing import List, Optional, Dict, Any
+# --- Standard Library Imports ---
 import os
 import uuid
-from datetime import datetime
-import aiofiles
-import asyncio
 import json
-from app.models.schemas import Document, QueryRequest, LLMConfig
-from app.services.rag_service import EnhancedRAGService
-from app.config import settings
-from app.utils.auth import create_hume_client_token, verify_hume_access_token
-from app.services.evi_config import get_or_create_study_buddy_config
 import logging
+from datetime import datetime
+from typing import List, Optional, Dict, Any
 
+# --- Third-Party Imports ---
+import aiofiles
+from fastapi import (
+    APIRouter, UploadFile, File, HTTPException, Depends, 
+    BackgroundTasks, Query, WebSocket, WebSocketDisconnect
+)
+from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# --- Application-Specific Imports ---
+from app.config import settings
+from app.database.connection import get_db_session, get_db_session_context
+from app.database.models import Document as DBDocument, ProcessingStatus as DBProcessingStatus
+from app.database.services import DocumentService
+from app.models.schemas import QueryRequest, LLMConfig
+from app.routes import database, chat_management
+from app.services.evi_config import get_or_create_study_buddy_config
+from app.services.rag_service import EnhancedRAGService
+from app.utils.auth import create_hume_client_token
+
+# -----------------------------------------------------------------------------
+# Setup
+# -----------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 rag_service = EnhancedRAGService()
 
-async def process_document_background(document: Document, file_path: str):
-    """Background task to process document after upload"""
+# Include database and chat management routes from the 'main' branch logic
+router.include_router(database.router, prefix="/db", tags=["database"])
+router.include_router(chat_management.router, prefix="/chat", tags=["chat-management"])
+
+
+# -----------------------------------------------------------------------------
+# Background Document Processing
+# -----------------------------------------------------------------------------
+
+async def process_document_background(db_document: DBDocument, file_path: str):
+    """Background task to process a document after upload, with database status updates."""
     try:
-        success = await rag_service.process_document(document, file_path)
-        logger.info(f"Background processing complete for {document.filename}: {'Success' if success else 'Failed'}")
+        # Update status to PROCESSING
+        async with get_db_session_context() as db:
+            await DocumentService.update_document_status(
+                db, db_document.id, DBProcessingStatus.PROCESSING
+            )
+            await db.commit()
+
+        # Process the document using the RAG service
+        success = await rag_service.process_document_by_id(db_document.id, file_path)
+
+        # Update final status in the database
+        async with get_db_session_context() as db:
+            new_status = DBProcessingStatus.INDEXED if success else DBProcessingStatus.ERROR
+            await DocumentService.update_document_status(db, db_document.id, new_status)
+
+            if success:
+                chunk_count = await rag_service.vector_store_service.get_document_chunk_count(
+                    db_document.uuid_filename
+                )
+                await DocumentService.update_document_chunks(db, db_document.id, chunk_count)
+
+            await db.commit()
+        logger.info(f"Background processing complete for {db_document.original_filename}: {'Success' if success else 'Failed'}")
+
     except Exception as e:
-        logger.error(f"Error in background processing for {document.filename}: {str(e)}")
+        logger.error(f"Error in background processing for {db_document.original_filename}: {str(e)}")
+        try:
+            async with get_db_session_context() as db:
+                await DocumentService.update_document_status(
+                    db, db_document.id, DBProcessingStatus.ERROR
+                )
+                await db.commit()
+        except Exception as db_error:
+            logger.error(f"Failed to update document status to ERROR: {str(db_error)}")
+
+
+# -----------------------------------------------------------------------------
+# Document Management Endpoints
+# -----------------------------------------------------------------------------
 
 @router.post("/documents/")
-async def upload_documents(
+async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db_session)
 ):
-    """Upload and process a document with background processing"""
+    """Upload and process a document with database integration."""
     try:
-        # Validate file extension
         file_extension = os.path.splitext(file.filename)[1].lower()
         if file_extension not in settings.ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type: {file_extension}. Allowed types: {', '.join(settings.ALLOWED_EXTENSIONS)}"
-            )
+            raise HTTPException(400, f"Unsupported file type. Allowed: {settings.ALLOWED_EXTENSIONS}")
 
-        # Create document record
-        doc_id = str(uuid.uuid4())
-        document = Document(
-            id=doc_id,
-            filename=file.filename,
+        content = await file.read()
+        if len(content) > settings.MAX_FILE_SIZE:
+            raise HTTPException(400, f"File too large. Max size: {settings.MAX_FILE_SIZE // (1024*1024)}MB")
+
+        uuid_filename = str(uuid.uuid4())
+        db_document = await DocumentService.create_document(
+            db,
+            original_filename=file.filename,
             file_type=file_extension[1:],
-            file_size=0,
-            upload_date=datetime.now(),
-            processed=False
+            file_size=len(content),
+            uuid_filename=uuid_filename,
+            metadata={"upload_source": "api"}
         )
 
-        # Ensure upload directory exists
         os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-
-        # Save file
-        file_path = os.path.join(settings.UPLOAD_DIR, f"{doc_id}{file_extension}")
-        content = await file.read()
+        file_path = os.path.join(settings.UPLOAD_DIR, f"{uuid_filename}{file_extension}")
+        async with aiofiles.open(file_path, 'wb') as out_file:
+            await out_file.write(content)
         
-        if len(content) > settings.MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"File too large. Maximum size: {settings.MAX_FILE_SIZE // (1024*1024)}MB"
-            )
-
-        # Update file size
-        document.file_size = len(content)
-
-        async with aiofiles.open(file_path, 'wb') as f:
-            await f.write(content)
-
-        # Add to background processing
-        background_tasks.add_task(process_document_background, document, file_path)
+        await db.commit()
+        background_tasks.add_task(process_document_background, db_document, file_path)
 
         return {
-            "id": document.id,
-            "filename": document.filename,
-            "status": "uploaded",
-            "message": "Document uploaded and queued for processing"
+            "status": "success",
+            "message": "File uploaded. Processing in background.",
+            "document": {
+                "id": db_document.id,
+                "uuid_filename": db_document.uuid_filename,
+                "original_filename": db_document.original_filename,
+                "processing_status": db_document.processing_status.value,
+            }
         }
     except Exception as e:
-        logger.error(f"Error uploading document: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error uploading document: {str(e)}"
-        )
+        logger.error(f"Error in upload: {str(e)}")
+        await db.rollback()
+        raise HTTPException(500, f"Error uploading document: {str(e)}")
+
 
 @router.get("/documents/")
-async def list_documents():
-    """Get list of uploaded documents"""
+async def list_documents(
+    limit: int = Query(default=50, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """List all documents from the database."""
     try:
-        documents_info = rag_service.get_documents_info()
-        return {
-            "documents": documents_info,
-            "total": len(documents_info)
-        }
+        documents = await DocumentService.get_all_documents(db, limit=limit, offset=offset)
+        return [{
+            "id": doc.id,
+            "original_filename": doc.original_filename,
+            "file_type": doc.file_type,
+            "file_size": doc.file_size,
+            "processing_status": doc.processing_status.value,
+            "created_at": doc.created_at.isoformat(),
+            "chunk_count": doc.chunk_count,
+            # Legacy fields for frontend compatibility
+            "filename": f"{doc.uuid_filename}.{doc.file_type}",
+            "processed": doc.processing_status == DBProcessingStatus.INDEXED
+        } for doc in documents]
     except Exception as e:
         logger.error(f"Error listing documents: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error listing documents: {str(e)}"
-        )
+        raise HTTPException(500, "Error listing documents")
+
+
+@router.get("/documents/{document_id}")
+async def get_document(document_id: int, db: AsyncSession = Depends(get_db_session)):
+    """Get a specific document by its database ID."""
+    document = await DocumentService.get_document_by_id(db, document_id)
+    if not document:
+        raise HTTPException(404, f"Document with ID {document_id} not found")
+    return document
+
+
+@router.delete("/documents/{document_id}")
+async def delete_document(document_id: int, db: AsyncSession = Depends(get_db_session)):
+    """Delete a document, its file, and its vector store entries."""
+    try:
+        document = await DocumentService.get_document_by_id(db, document_id)
+        if not document:
+            raise HTTPException(404, f"Document with ID {document_id} not found")
+
+        # Delete physical file
+        file_path = os.path.join(settings.UPLOAD_DIR, f"{document.uuid_filename}.{document.file_type}")
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        # Delete from vector store
+        await rag_service.vector_store_service.delete_by_metadata({"document_id": str(document.id)})
+        
+        # Delete from database
+        await DocumentService.delete_document(db, document_id)
+        await db.commit()
+
+        return {"status": "success", "message": f"Document '{document.original_filename}' deleted."}
+    except Exception as e:
+        logger.error(f"Error deleting document {document_id}: {str(e)}")
+        await db.rollback()
+        raise HTTPException(500, "Error processing delete request")
+
+
+# -----------------------------------------------------------------------------
+# RAG Query and System Status Endpoints
+# -----------------------------------------------------------------------------
 
 @router.post("/query/")
-async def query_documents(request: QueryRequest):
-    """Query documents using RAG"""
+async def query_documents(
+    query: QueryRequest,
+    session_uuid: Optional[str] = Query(None, description="Chat session UUID for document context")
+):
+    """Query documents and get an AI response, with optional session context."""
     try:
-        # Use streaming response for real-time results
-        async def generate_response():
-            try:
-                async for chunk in rag_service.query_documents_stream(
-                    question=request.question,
-                    context_window=request.context_window or settings.DEFAULT_CONTEXT_WINDOW,
-                    model_provider=request.model_provider or settings.DEFAULT_MODEL_PROVIDER,
-                    llm_config=request.llm_config
-                ):
-                    yield f"data: {json.dumps(chunk)}\n\n"
-            except Exception as e:
-                error_chunk = {
-                    "type": "error",
-                    "content": str(e)
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
+        if query.context_window is not None:
+            query.context_window = max(1, min(query.context_window, settings.MAX_CONTEXT_WINDOW))
 
-        return StreamingResponse(
-            generate_response(),
-            media_type="text/plain",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Content-Type": "text/plain; charset=utf-8"
-            }
-        )
+        logger.info(f"Query for session '{session_uuid}': '{query.question}'")
+        
+        async def response_generator():
+            async for chunk in rag_service.generate_response(query, session_uuid=session_uuid):
+                yield f"data: {json.dumps(chunk)}\n\n"
+        
+        return StreamingResponse(response_generator(), media_type="text/event-stream")
     except Exception as e:
         logger.error(f"Error querying documents: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error querying documents: {str(e)}"
-        )
+        raise HTTPException(500, "Error querying documents")
+
 
 @router.get("/status")
-async def get_status():
-    """Get system status"""
+async def get_status(db: AsyncSession = Depends(get_db_session)):
+    """Get system status, including database and model info."""
     try:
-        documents_info = rag_service.get_documents_info()
+        doc_count = await DocumentService.get_total_document_count(db)
+        providers_available = {
+            "ollama": rag_service.ollama_model is not None,
+            "gemini": rag_service.gemini_model is not None and settings.GOOGLE_API_KEY is not None
+        }
+        model_info = {
+            "name": settings.GEMINI_MODEL if rag_service.current_provider == "gemini" else settings.OLLAMA_MODEL,
+            "provider": rag_service.current_provider,
+        }
         return {
             "status": "healthy",
-            "documents_in_vector_store": len(documents_info),
-            "uploaded_files_count": len([f for f in os.listdir(settings.UPLOAD_DIR) if os.path.isfile(os.path.join(settings.UPLOAD_DIR, f))]) if os.path.exists(settings.UPLOAD_DIR) else 0,
+            "documents_in_db": doc_count,
             "embedding_model": settings.EMBEDDINGS_MODEL,
-            "llm_model": {
-                "default_provider": settings.DEFAULT_MODEL_PROVIDER,
-                "ollama_model": settings.OLLAMA_MODEL,
-                "gemini_model": settings.GEMINI_MODEL
-            },
-            "timestamp": datetime.now(),
-            "hume_configured": bool(settings.HUME_API_KEY)
+            "llm_model": model_info,
+            "providers_available": providers_available,
+            "hume_configured": bool(settings.HUME_API_KEY and settings.HUME_SECRET_KEY),
+            "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"Error getting status: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error getting status: {str(e)}"
-        )
+        raise HTTPException(500, "Error checking status")
 
-# Hume EVI Authentication Endpoints
+
+@router.post("/model/switch")
+async def switch_model(model_config: LLMConfig):
+    """Switch between available model providers (Ollama/Gemini)."""
+    try:
+        rag_service.set_provider(model_config.provider.value)
+        logger.info(f"Switched model provider to: {model_config.provider.value}")
+        return {
+            "status": "success",
+            "message": f"Successfully switched to {model_config.provider.value}",
+            "current_provider": rag_service.current_provider
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error switching model: {str(e)}")
+        raise HTTPException(500, "Error switching model")
+
+
+# -----------------------------------------------------------------------------
+# Hume EVI and Voice RAG Endpoints
+# -----------------------------------------------------------------------------
 
 @router.get("/auth/hume-token")
 async def get_hume_token():
-    """Generate access token for Hume EVI authentication"""
-    if not settings.HUME_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Hume AI is not configured. Please contact administrator."
-        )
-    
+    """Generate an access token for Hume EVI authentication."""
+    if not all([settings.HUME_API_KEY, settings.HUME_SECRET_KEY]):
+        raise HTTPException(503, "Hume AI is not configured.")
     try:
-        # Create secure client token for frontend
         token_data = create_hume_client_token()
-        
-        # Get or create Study Buddy EVI configuration
         config_id = await get_or_create_study_buddy_config()
-        
-        return {
-            **token_data,
-            "config_id": config_id,
-            "hostname": "api.hume.ai"
-        }
+        return {**token_data, "config_id": config_id, "hostname": "api.hume.ai"}
     except Exception as e:
         logger.error(f"Error generating Hume token: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate Hume authentication token: {str(e)}"
-        )
+        raise HTTPException(500, "Failed to generate Hume authentication token")
 
-# Voice Chat RAG Integration
-
-@router.post("/voice/query")
-async def voice_rag_query(request: Dict[str, Any]):
-    """
-    Process voice transcription through RAG system
-    This endpoint receives transcriptions from voice chat and returns RAG responses
-    """
-    try:
-        transcription = request.get("transcription", "").strip()
-        if not transcription:
-            raise HTTPException(status_code=400, detail="No transcription provided")
-        
-        # Create QueryRequest from voice input
-        query_request = QueryRequest(
-            question=transcription,
-            context_window=5,  # Optimal for voice responses
-            model_provider=settings.DEFAULT_MODEL_PROVIDER
-        )
-        
-        # Get RAG response
-        response_chunks = []
-        async for chunk in rag_service.query_documents_stream(
-            question=query_request.question,
-            context_window=query_request.context_window,
-            model_provider=query_request.model_provider
-        ):
-            response_chunks.append(chunk)
-        
-        # Combine chunks into final response
-        full_response = ""
-        sources = []
-        
-        for chunk in response_chunks:
-            if chunk.get("type") == "content":
-                full_response += chunk.get("content", "")
-            elif chunk.get("type") == "sources":
-                sources = chunk.get("sources", [])
-        
-        # Format response for voice (concise but informative)
-        formatted_response = format_response_for_voice(full_response, sources)
-        
-        return {
-            "success": True,
-            "response": formatted_response,
-            "sources": sources,
-            "original_transcription": transcription
-        }
-        
-    except Exception as e:
-        logger.error(f"Error processing voice RAG query: {str(e)}")
-        return {
-            "success": False,
-            "error": str(e),
-            "response": "I'm sorry, I encountered an error while searching your documents. Please try again."
-        }
 
 def format_response_for_voice(response: str, sources: List[Dict]) -> str:
-    """
-    Format RAG response for voice delivery
-    - Keep it conversational
-    - Include source mentions naturally
-    - Ensure it flows well when spoken
-    """
+    """Formats a RAG response for natural-sounding voice delivery."""
     if not response:
         return "I couldn't find relevant information in your documents for that question."
-    
-    # Add source mentions naturally in voice format
     if sources:
-        source_names = [source.get("filename", "document") for source in sources[:2]]  # Limit to 2 for voice
-        if len(source_names) == 1:
-            source_mention = f"Based on your {source_names[0]}, "
-        else:
-            source_mention = f"Based on your documents {' and '.join(source_names)}, "
-        
-        # Insert source mention naturally
-        response = source_mention + response.lower()
-    
+        source_names = [s.get("filename", "your document") for s in sources[:1]]
+        source_mention = f"Based on {source_names[0]}, "
+        return source_mention + response
     return response
 
-# Document Management Endpoints (existing)
 
-@router.delete("/documents/{document_id}")
-async def delete_document(document_id: str):
-    """Delete a document"""
-    try:
-        success = await rag_service.delete_document(document_id)
-        if success:
-            return {"message": "Document deleted successfully"}
-        else:
-            raise HTTPException(status_code=404, detail="Document not found")
-    except Exception as e:
-        logger.error(f"Error deleting document: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error deleting document: {str(e)}"
-        )
-
-@router.post("/model/switch")
-async def switch_model(request: Dict[str, Any]):
-    """Switch between model providers (Ollama/Gemini)"""
-    try:
-        provider = request.get("provider")
-        if provider not in ["ollama", "gemini"]:
-            raise HTTPException(status_code=400, detail="Invalid provider. Use 'ollama' or 'gemini'")
-        
-        # Update the default provider
-        settings.DEFAULT_MODEL_PROVIDER = provider
-        
-        return {
-            "message": f"Switched to {provider} provider",
-            "current_provider": provider
-        }
-    except Exception as e:
-        logger.error(f"Error switching model: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error switching model: {str(e)}"
-        )
-        
 @router.websocket("/ws/voice-rag")
-async def websocket_voice_rag(websocket: WebSocket):
-    """
-    WebSocket endpoint for real-time voice RAG integration
-    Receives voice transcriptions and sends back RAG responses
-    """
+async def websocket_voice_rag(
+    websocket: WebSocket,
+    session_uuid: Optional[str] = Query(None)
+):
+    """WebSocket for real-time voice RAG, aware of the chat session."""
     await websocket.accept()
-    logger.info("Voice RAG WebSocket connection established")
-    
+    logger.info(f"Voice RAG WebSocket connected for session: {session_uuid}")
     try:
         while True:
-            # Receive message from frontend
             data = await websocket.receive_text()
             message = json.loads(data)
             
-            message_type = message.get("type")
-            
-            if message_type == "transcription":
-                # Process voice transcription through RAG
-                transcription = message.get("text", "").strip()
+            if message.get("type") == "transcription" and message.get("text", "").strip():
+                transcription = message["text"].strip()
+                logger.info(f"Processing transcription '{transcription}' for session '{session_uuid}'")
                 
-                if transcription:
-                    logger.info(f"Processing voice transcription: {transcription}")
+                await websocket.send_text(json.dumps({"type": "processing"}))
+                
+                try:
+                    query = QueryRequest(question=transcription)
+                    full_response, sources = "", []
                     
-                    try:
-                        # Send acknowledgment
-                        await websocket.send_text(json.dumps({
-                            "type": "processing",
-                            "message": "Searching your documents..."
-                        }))
-                        
-                        # Process through RAG
-                        query_request = QueryRequest(
-                            question=transcription,
-                            context_window=5,
-                            model_provider=settings.DEFAULT_MODEL_PROVIDER
-                        )
-                        
-                        response_chunks = []
-                        async for chunk in rag_service.query_documents_stream(
-                            question=query_request.question,
-                            context_window=query_request.context_window,
-                            model_provider=query_request.model_provider
-                        ):
-                            response_chunks.append(chunk)
-                        
-                        # Combine response
-                        full_response = ""
-                        sources = []
-                        
-                        for chunk in response_chunks:
-                            if chunk.get("type") == "content":
-                                full_response += chunk.get("content", "")
-                            elif chunk.get("type") == "sources":
-                                sources = chunk.get("sources", [])
-                        
-                        # Format for voice and send response
-                        formatted_response = format_response_for_voice(full_response, sources)
-                        
-                        await websocket.send_text(json.dumps({
-                            "type": "rag_response",
-                            "response": formatted_response,
-                            "sources": sources,
-                            "original_question": transcription
-                        }))
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing voice transcription: {str(e)}")
-                        await websocket.send_text(json.dumps({
-                            "type": "error",
-                            "message": "Sorry, I encountered an error while searching your documents."
-                        }))
-                
-            elif message_type == "ping":
-                # Health check
-                await websocket.send_text(json.dumps({
-                    "type": "pong",
-                    "timestamp": datetime.now().isoformat()
-                }))
-                
+                    async for chunk in rag_service.generate_response(query, session_uuid):
+                        if chunk.get("type") == "content":
+                            full_response += chunk.get("content", "")
+                        elif chunk.get("type") == "sources":
+                            sources = chunk.get("sources", [])
+
+                    formatted_response = format_response_for_voice(full_response, sources)
+                    
+                    await websocket.send_text(json.dumps({
+                        "type": "rag_response",
+                        "response": formatted_response,
+                    }))
+                except Exception as e:
+                    logger.error(f"Error in RAG processing for WebSocket: {e}")
+                    await websocket.send_text(json.dumps({"type": "error"}))
+            
     except WebSocketDisconnect:
-        logger.info("Voice RAG WebSocket disconnected")
+        logger.info(f"Voice RAG WebSocket disconnected for session: {session_uuid}")
     except Exception as e:
-        logger.error(f"Voice RAG WebSocket error: {str(e)}")
-        try:
-            await websocket.close(code=1011, reason="Internal server error")
-        except:
-            pass
+        logger.error(f"Voice RAG WebSocket error for session {session_uuid}: {e}")
+        await websocket.close(code=1011)

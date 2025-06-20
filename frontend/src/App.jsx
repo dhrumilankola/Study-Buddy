@@ -1,199 +1,174 @@
 import { useState, useEffect } from 'react';
-import Layout from './components/Layout';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+import { CssBaseline, Box, Drawer, AppBar, Toolbar, Typography, IconButton } from '@mui/material';
+import { Menu as MenuIcon, Mic, MessageSquare } from '@mui/icons-material';
 import ChatInterface from './components/ChatInterface';
-import DocumentList from './components/DocumentList';
+import DocumentManager from './components/DocumentManager';
 import FileUpload from './components/FileUpload';
 import StatusIndicator from './components/StatusIndicator';
 import VoiceChatInterface from './components/VoiceChatInterface';
-import { Mic, MessageSquare, FileText } from 'lucide-react';
+import ChatSessionManager from './components/ChatSessionManager';
+import SessionDocumentManager from './components/SessionDocumentManager';
+
+// Create Material-UI theme
+const theme = createTheme({
+  palette: {
+    mode: 'light',
+    primary: { main: '#1976d2' },
+    secondary: { main: '#dc004e' },
+  },
+});
+
+const DRAWER_WIDTH = 320;
 
 export default function App() {
-  const [currentView, setCurrentView] = useState('chat'); // Default view
+  const [currentView, setCurrentView] = useState('chat');
   const [showUpload, setShowUpload] = useState(false);
-  const [isTransitioning, setIsTransitioning] = useState(false);
   const [chatMode, setChatMode] = useState('text'); // 'text' or 'voice'
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+  const [showSessionDocManager, setShowSessionDocManager] = useState(false);
 
-  // Handle view transitions
-  const handleNavigation = (view) => {
-    if (view === currentView && !showUpload) return;
-    
-    setIsTransitioning(true);
-    setTimeout(() => {
-      setCurrentView(view);
-      setShowUpload(false);
-      setIsTransitioning(false);
-    }, 150);
+  // Handle session selection from the sidebar
+  const handleSessionSelect = (sessionUuid) => {
+    setCurrentSessionId(sessionUuid);
+    setCurrentView('chat');
+    if (isMobile) setSidebarOpen(false);
   };
 
-  // Handle upload modal
-  const handleUploadClick = () => {
-    setIsTransitioning(true);
-    setTimeout(() => {
-      setShowUpload(true);
-      setIsTransitioning(false);
-    }, 150);
+  // Handle creation of a new session
+  const handleNewSession = (session) => {
+    setCurrentSessionId(session.session_uuid);
+    setCurrentView('chat');
+  };
+  
+  // Handle document management for a session
+  const handleManageSessionDocuments = (sessionUuid) => {
+    setCurrentSessionId(sessionUuid);
+    setShowSessionDocManager(true);
   };
 
-  // Handle upload completion
-  const handleUploadComplete = () => {
-    setIsTransitioning(true);
-    setTimeout(() => {
-      setShowUpload(false);
-      setCurrentView('documents');
-      setIsTransitioning(false);
-    }, 150);
-  };
-
-  // Handle escape key to close upload
+  // Check for mobile screen size
   useEffect(() => {
-    const handleEscape = (e) => {
-      if (e.key === 'Escape' && showUpload) {
-        setShowUpload(false);
-      }
-    };
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [showUpload]);
-
-  // Chat Mode Toggle Component
-  const ChatModeToggle = () => (
-    <div className="flex items-center bg-gray-100 rounded-lg p-1 mb-6">
-      <button
-        onClick={() => setChatMode('text')}
-        className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
-          chatMode === 'text'
-            ? 'bg-white text-blue-600 shadow-sm'
-            : 'text-gray-600 hover:text-gray-800'
-        }`}
-      >
-        <MessageSquare className="w-4 h-4" />
-        <span>Text Chat</span>
-      </button>
-      <button
-        onClick={() => setChatMode('voice')}
-        className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
-          chatMode === 'voice'
-            ? 'bg-white text-blue-600 shadow-sm'
-            : 'text-gray-600 hover:text-gray-800'
-        }`}
-      >
-        <Mic className="w-4 h-4" />
-        <span>Voice Chat</span>
-      </button>
-    </div>
-  );
-
-  const renderCurrentView = () => {
+  // Main content renderer
+  const renderMainContent = () => {
     if (showUpload) {
-      return (
-        <div className="animate-fade-in">
-          <FileUpload onComplete={handleUploadComplete} onClose={() => setShowUpload(false)} />
-        </div>
-      );
+      return <FileUpload onComplete={() => setShowUpload(false)} onClose={() => setShowUpload(false)} />;
     }
 
+    if (!currentSessionId) {
+      return (
+        <Box sx={{ p: 3, textAlign: 'center' }}>
+          <Typography variant="h5">Welcome to Study Buddy</Typography>
+          <Typography>Please select a session or create a new one to begin.</Typography>
+        </Box>
+      );
+    }
+    
     switch (currentView) {
       case 'chat':
         return (
-          <div className="space-y-6 animate-fade-in">
-            <StatusIndicator />
-            
-            {/* Chat Mode Toggle */}
+          <Box sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <StatusIndicator sessionId={currentSessionId} />
             <ChatModeToggle />
-            
-            {/* Chat Interface based on mode */}
             {chatMode === 'text' ? (
-              <div>
-                <div className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                  <h3 className="text-lg font-semibold text-blue-800 mb-2">Text Chat Mode</h3>
-                  <p className="text-blue-700">
-                    Type your questions and get detailed responses with citations from your uploaded documents.
-                  </p>
-                </div>
-                <ChatInterface />
-              </div>
+              <ChatInterface key={currentSessionId} sessionUuid={currentSessionId} />
             ) : (
-              <div>
-                <div className="mb-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
-                  <h3 className="text-lg font-semibold text-purple-800 mb-2">Voice Chat Mode</h3>
-                  <p className="text-purple-700">
-                    Speak naturally and get AI-powered responses based on your uploaded documents. 
-                    Your voice is transcribed and processed through the same RAG system.
-                  </p>
-                </div>
-                <VoiceChatInterface />
-              </div>
+              <VoiceChatInterface key={currentSessionId} sessionUuid={currentSessionId} />
             )}
-          </div>
+          </Box>
         );
-        
       case 'documents':
-        return (
-          <div className="space-y-6 animate-fade-in">
-            <StatusIndicator />
-            <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-              <h3 className="text-lg font-semibold text-green-800 mb-2">Document Library</h3>
-              <p className="text-green-700">
-                Manage your uploaded documents. These are the sources used for both text and voice chat responses.
-              </p>
-            </div>
-            <DocumentList />
-          </div>
-        );
-        
+        return <DocumentManager />;
       default:
         return null;
     }
   };
 
-  return (
-    <Layout 
-      onNavigate={handleNavigation} 
-      onUploadClick={handleUploadClick}
-      currentView={currentView}
-    >
-      <div className="container mx-auto px-4">
-        {/* Main Content Header */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">
-                {currentView === 'chat' ? 'Study Buddy Chat' : 
-                 currentView === 'documents' ? 'Document Library' : 'Study Buddy'}
-              </h1>
-              <p className="text-gray-600">
-                {currentView === 'chat' ? 
-                  (chatMode === 'voice' ? 
-                    'Ask questions about your documents using voice commands' :
-                    'Ask questions about your documents using text'
-                  ) :
-                 currentView === 'documents' ? 
-                  'Manage and view your uploaded study materials' : 
-                  'Your AI-powered study companion'
-                }
-              </p>
-            </div>
-            
-            {/* Quick Stats */}
-            {currentView === 'chat' && (
-              <div className="hidden md:flex space-x-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-blue-600">
-                    {chatMode === 'voice' ? <Mic className="w-8 h-8 mx-auto" /> : <MessageSquare className="w-8 h-8 mx-auto" />}
-                  </div>
-                  <div className="text-sm text-gray-600 capitalize">{chatMode} Mode</div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+  const ChatModeToggle = () => (
+    <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+      <button
+        onClick={() => setChatMode('text')}
+        className={`flex items-center space-x-2 px-3 py-1 rounded-l-lg font-medium transition-all ${chatMode === 'text' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+      >
+        <MessageSquare fontSize="small" />
+        <span>Text</span>
+      </button>
+      <button
+        onClick={() => setChatMode('voice')}
+        className={`flex items-center space-x-2 px-3 py-1 rounded-r-lg font-medium transition-all ${chatMode === 'voice' ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+      >
+        <Mic fontSize="small" />
+        <span>Voice</span>
+      </button>
+    </Box>
+  );
 
-        {/* Transition wrapper */}
-        <div className={`transition-opacity duration-150 ${isTransitioning ? 'opacity-0' : 'opacity-100'}`}>
-          {renderCurrentView()}
-        </div>
-      </div>
-    </Layout>
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Box sx={{ display: 'flex', height: '100vh' }}>
+        <AppBar
+          position="fixed"
+          sx={{
+            zIndex: (theme) => theme.zIndex.drawer + 1,
+            width: !sidebarOpen ? '100%' : `calc(100% - ${DRAWER_WIDTH}px)`,
+            transition: 'width 0.3s'
+          }}
+        >
+          <Toolbar>
+            <IconButton
+              color="inherit"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              edge="start"
+              sx={{ mr: 2 }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6" noWrap component="div">Study Buddy</Typography>
+          </Toolbar>
+        </AppBar>
+
+        <Drawer
+          variant={isMobile ? "temporary" : "persistent"}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          sx={{
+            width: DRAWER_WIDTH,
+            flexShrink: 0,
+            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
+          }}
+        >
+          <Toolbar />
+          <ChatSessionManager
+            onSessionSelect={handleSessionSelect}
+            currentSessionId={currentSessionId}
+            onNewSession={handleNewSession}
+            onManageDocuments={handleManageSessionDocuments}
+            onUploadClick={() => setShowUpload(true)}
+          />
+        </Drawer>
+
+        <Box component="main" sx={{ flexGrow: 1, height: '100vh', overflow: 'hidden' }}>
+          <Toolbar />
+          <Box sx={{ height: 'calc(100vh - 64px)', overflowY: 'auto' }}>
+            {renderMainContent()}
+          </Box>
+        </Box>
+        
+        <SessionDocumentManager
+          sessionUuid={currentSessionId}
+          isOpen={showSessionDocManager}
+          onClose={() => setShowSessionDocManager(false)}
+        />
+      </Box>
+    </ThemeProvider>
   );
 }
