@@ -8,58 +8,76 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from app.config import settings
+from app.services.evi_config import get_or_create_study_buddy_config
 import logging
+import httpx
 
 logger = logging.getLogger(__name__)
 
-def create_hume_client_token() -> Dict[str, Any]:
+async def create_hume_client_token() -> Dict[str, Any]:
     """
-    Create a secure JWT token for frontend Hume EVI authentication
+    Create a secure JWT token and get EVI config for frontend Hume EVI authentication.
     
     Returns:
-        Dict containing access_token, token_type, expires_in
+        Dict containing access_token, config_id, and other connection details.
     """
-    if not settings.HUME_API_KEY:
-        raise ValueError("HUME_API_KEY not configured")
+    if not settings.HUME_API_KEY or not settings.JWT_SECRET_KEY:
+        raise ValueError("HUME_API_KEY and JWT_SECRET_KEY must be configured")
+
+    # 1. Get or create the EVI configuration
+    config_id = await get_or_create_study_buddy_config()
     
-    if not settings.JWT_SECRET_KEY:
-        raise ValueError("JWT_SECRET_KEY not configured")
-    
-    # Create token payload
-    now = datetime.utcnow()
-    expires_at = now + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    
-    payload = {
-        "iss": "study-buddy",  # Issuer
-        "sub": "hume-client",  # Subject
-        "aud": "hume-api",     # Audience
-        "iat": int(now.timestamp()),  # Issued at
-        "exp": int(expires_at.timestamp()),  # Expires at
-        "scope": "voice-chat",
-        "hume_api_key": settings.HUME_API_KEY[:10] + "...",  # Truncated for security
-    }
-    
-    # Create JWT token
-    token = jwt.encode(
-        payload,
-        settings.JWT_SECRET_KEY,
-        algorithm=settings.JWT_ALGORITHM
-    )
-    
-    logger.info(f"Created Hume client token (expires: {expires_at})")
-    
+    # If config creation fails, we cannot proceed with voice chat.
+    if not config_id:
+        logger.error("Failed to obtain Hume EVI Config ID. Cannot create client token for voice.")
+        # Return a structure that indicates failure to the frontend.
+        return {
+            "error": "EVI Configuration Failed",
+            "message": "The backend could not create a configuration for the voice assistant."
+        }
+
+    # 2. Exchange API key + secret key for an access token via Hume OAuth2-CC endpoint
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                "https://api.hume.ai/oauth2-cc/token",
+                auth=(settings.HUME_API_KEY, settings.HUME_SECRET_KEY),
+                data={"grant_type": "client_credentials"},
+                headers={"Accept": "application/json"}
+            )
+            response.raise_for_status()
+            token_data = response.json()
+            access_token = token_data.get("access_token")
+            expires_in = token_data.get("expires_in")
+            token_type = token_data.get("token_type", "Bearer")
+
+            if not access_token:
+                raise ValueError("Hume token response missing 'access_token'")
+
+    except Exception as e:
+        logger.error(f"Failed to obtain Hume access token: {e}")
+        return {
+            "error": "Token Generation Failed",
+            "message": "Could not obtain access token from Hume API."
+        }
+
+    expires_at = datetime.utcnow() + timedelta(seconds=expires_in or 0)
+    logger.info(f"Obtained Hume access token (expires: {expires_at}) for config_id: {config_id}")
+
     return {
-        "access_token": token,
-        "token_type": "Bearer",
-        "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "access_token": access_token,
+        "token_type": token_type,
+        "expires_in": expires_in,
         "scope": "voice-chat",
-        "created_at": int(now.timestamp()),
-        "expires_at": int(expires_at.timestamp())
+        "created_at": int(datetime.utcnow().timestamp()),
+        "expires_at": int(expires_at.timestamp()),
+        "config_id": config_id,
+        "hostname": "api.hume.ai"
     }
 
 def verify_hume_access_token(token: str) -> Optional[Dict[str, Any]]:
     """
-    Verify and decode a Hume access token
+    Verify and decode a Hume access token.
     
     Args:
         token: JWT token to verify
@@ -72,10 +90,10 @@ def verify_hume_access_token(token: str) -> Optional[Dict[str, Any]]:
         if token.startswith('Bearer '):
             token = token[7:]
         
-        # Decode and verify token
+        # Decode and verify token using the Hume Secret Key
         payload = jwt.decode(
             token,
-            settings.JWT_SECRET_KEY,
+            settings.HUME_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
             audience="hume-api",
             issuer="study-buddy"

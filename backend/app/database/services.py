@@ -10,7 +10,7 @@ from datetime import datetime
 import uuid
 import logging
 
-from app.database.models import Document, ChatSession, ChatMessage, ProcessingStatus, ModelProvider
+from app.database.models import Document, ChatSession, ChatMessage, ProcessingStatus, ModelProvider, chat_session_documents
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,12 @@ class DocumentService:
         return result.scalars().all()
 
     @staticmethod
+    async def get_documents_count(session: AsyncSession) -> int:
+        """Get the total number of documents in the database."""
+        result = await session.execute(select(func.count(Document.id)))
+        return result.scalar_one()
+
+    @staticmethod
     async def update_document_status(
         session: AsyncSession,
         document_id: int,
@@ -118,7 +124,15 @@ class DocumentService:
 
     @staticmethod
     async def delete_document(session: AsyncSession, document_id: int) -> bool:
-        """Delete a document record"""
+        """Delete a document record and clean up associations."""
+        # Remove any chat_session ↔ document associations first to avoid FK violations
+        await session.execute(
+            delete(chat_session_documents).where(chat_session_documents.c.document_id == document_id)
+        )
+        # Flush to persist association deletions before removing the document
+        await session.flush()
+
+        # Now delete the actual document
         result = await session.execute(delete(Document).where(Document.id == document_id))
         success = result.rowcount > 0
         if success:
@@ -226,10 +240,24 @@ class ChatService:
     
     @staticmethod
     async def delete_session(session: AsyncSession, session_uuid: str) -> bool:
-        """Delete a chat session and all its messages"""
+        """Delete a chat session and all its related data (messages & associations)."""
+        # First, fetch the session ID
         result = await session.execute(
-            delete(ChatSession).where(ChatSession.session_uuid == session_uuid)
+            select(ChatSession.id).where(ChatSession.session_uuid == session_uuid)
         )
+        session_id = result.scalar_one_or_none()
+        if session_id is None:
+            return False
+
+        # Delete associations in the join table to prevent FK constraint errors
+        await session.execute(
+            delete(chat_session_documents).where(chat_session_documents.c.chat_session_id == session_id)
+        )
+        # Ensure the association deletions are flushed to the DB before deleting the session itself
+        await session.flush()
+
+        # Delete the chat session itself (will cascade-delete messages via DB FK)
+        result = await session.execute(delete(ChatSession).where(ChatSession.id == session_id))
         success = result.rowcount > 0
         if success:
             logger.info(f"Deleted chat session {session_uuid}")

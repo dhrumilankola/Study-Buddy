@@ -5,7 +5,7 @@ Manages EVI configurations for Study Buddy voice chat integration
 
 import logging
 from typing import Optional, Dict, Any
-from hume.client import HumeClient
+from hume.client import AsyncHumeClient, HumeClient
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -15,11 +15,12 @@ STUDY_BUDDY_EVI_CONFIG = {
     "name": "Study Buddy Voice Assistant",
     "description": "AI-powered study companion with document-aware voice chat",
     "voice": {
-        "provider": "hume",
+        "type": "Evi2",
+        "provider": "HUME_AI",
         "name": "ITO",  # Calm, clear voice suitable for educational content
     },
     "language_model": {
-        "model_provider": "anthropic",
+        "model_provider": "ANTHROPIC",
         "model_resource": "claude-3-haiku-20240307",
         "temperature": 0.7,
         "max_tokens": 150,  # Shorter responses for voice
@@ -77,18 +78,25 @@ async def get_or_create_study_buddy_config() -> str:
         raise ValueError("HUME_API_KEY not configured")
     
     try:
-        client = HumeClient(api_key=settings.HUME_API_KEY)
+        client = AsyncHumeClient(api_key=settings.HUME_API_KEY)
         
-        # Check if we already have a config ID stored
-        if settings.HUME_EVI_CONFIG_ID:
-            # Verify the config still exists
-            try:
-                config = await get_evi_config(settings.HUME_EVI_CONFIG_ID)
-                if config:
-                    logger.info(f"Using existing EVI config: {settings.HUME_EVI_CONFIG_ID}")
-                    return settings.HUME_EVI_CONFIG_ID
-            except Exception as e:
-                logger.warning(f"Stored config ID invalid, creating new one: {e}")
+        # First, list existing configs once so we can reuse the result
+        existing_configs_pager = await client.empathic_voice.configs.list_configs()
+        existing_ids = {}
+        async for cfg in existing_configs_pager:
+            existing_ids[cfg.id] = cfg  # keep reference for later
+
+        # If we have a stored ID, prefer it if it still exists
+        if settings.HUME_EVI_CONFIG_ID and settings.HUME_EVI_CONFIG_ID in existing_ids:
+            logger.info(f"Using existing EVI config by stored ID: {settings.HUME_EVI_CONFIG_ID}")
+            return settings.HUME_EVI_CONFIG_ID
+
+        # If a config with our standard name exists, reuse it
+        for cfg in existing_ids.values():
+            if cfg.name == STUDY_BUDDY_EVI_CONFIG["name"]:
+                logger.info(f"Reusing existing EVI config found by name: {cfg.id}")
+                settings.HUME_EVI_CONFIG_ID = cfg.id
+                return cfg.id
         
         # Create new configuration
         logger.info("Creating new Study Buddy EVI configuration...")
@@ -106,7 +114,7 @@ async def get_or_create_study_buddy_config() -> str:
         logger.warning("Using default EVI configuration")
         return None
 
-async def create_study_buddy_config(client: HumeClient) -> str:
+async def create_study_buddy_config(client: AsyncHumeClient) -> str:
     """
     Create a new Study Buddy EVI configuration
     
@@ -117,42 +125,42 @@ async def create_study_buddy_config(client: HumeClient) -> str:
         Configuration ID
     """
     try:
-        # Note: The exact API for creating EVI configs may vary based on Hume's latest SDK
-        # This is a template that should be adjusted based on current Hume documentation
-        
-        response = await client.empathic_voice.configs.create(
+        system_prompt_text = STUDY_BUDDY_EVI_CONFIG["language_model"]["system_prompt"]
+        response = await client.empathic_voice.configs.create_config(
+            evi_version="1",
             name=STUDY_BUDDY_EVI_CONFIG["name"],
-            description=STUDY_BUDDY_EVI_CONFIG["description"],
-            prompt=STUDY_BUDDY_EVI_CONFIG["language_model"]["system_prompt"],
-            voice=STUDY_BUDDY_EVI_CONFIG["voice"]["name"],
-            language_model=STUDY_BUDDY_EVI_CONFIG["language_model"]["model_resource"],
-            temperature=STUDY_BUDDY_EVI_CONFIG["language_model"]["temperature"],
-            max_tokens=STUDY_BUDDY_EVI_CONFIG["language_model"]["max_tokens"],
+            voice=STUDY_BUDDY_EVI_CONFIG["voice"],
+            language_model={
+                "model_provider": STUDY_BUDDY_EVI_CONFIG["language_model"]["model_provider"],
+                "model_resource": STUDY_BUDDY_EVI_CONFIG["language_model"]["model_resource"],
+                "temperature": STUDY_BUDDY_EVI_CONFIG["language_model"]["temperature"],
+                "max_tokens": STUDY_BUDDY_EVI_CONFIG["language_model"]["max_tokens"],
+            },
+            prompt={"text": system_prompt_text},
             event_messages=STUDY_BUDDY_EVI_CONFIG["event_messages"]
         )
-        
         return response.id
-        
     except Exception as e:
+        # Handle duplicate config name (status 409)
+        if "409" in str(e):
+            logger.info("Config already exists, searching for existing one...")
+            pager = await client.empathic_voice.configs.list_configs()
+            async for cfg in pager:
+                if cfg.name == STUDY_BUDDY_EVI_CONFIG["name"]:
+                    return cfg.id
         logger.error(f"Failed to create EVI configuration: {e}")
         raise
 
 async def get_evi_config(config_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Retrieve an EVI configuration by ID
-    
-    Args:
-        config_id: Configuration ID
-        
-    Returns:
-        Configuration data if found, None otherwise
-    """
+    """Look up a config by id using list_configs fallback (SDK has no .get for async)."""
     try:
-        client = HumeClient(api_key=settings.HUME_API_KEY)
-        
-        config = await client.empathic_voice.configs.get(id=config_id)
-        return config.dict() if config else None
-        
+        client = AsyncHumeClient(api_key=settings.HUME_API_KEY)
+        pager = await client.empathic_voice.configs.list_configs()
+        # pager may be AsyncPager; iterate over items
+        async for cfg in pager:
+            if cfg.id == config_id:
+                return cfg.dict()
+        return None
     except Exception as e:
         logger.error(f"Error retrieving EVI config {config_id}: {e}")
         return None

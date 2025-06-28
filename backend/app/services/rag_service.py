@@ -1,5 +1,6 @@
 from typing import List, Dict, AsyncGenerator, Optional, Any, Tuple, Union
-from app.models.schemas import Document, QueryRequest, LLMConfig
+from app.models.schemas import Document as SchemaDocument, QueryRequest, LLMConfig
+from app.database.models import Document as DBDocument
 from app.services.vector_store import EnhancedVectorStoreService
 from app.services.document_processor import EnhancedDocumentProcessor
 from langchain_community.chat_models import ChatOllama
@@ -157,14 +158,26 @@ class EnhancedRAGService:
             logger.error(f"Error initializing Gemini model: {str(e)}", exc_info=True)
             self.gemini_model = None
 
-    async def process_document(self, document: Document, file_path: str) -> bool:
+    async def process_document(self, document: DBDocument, file_path: str) -> bool:
         """Process a document and add it to vector store"""
         try:
-            logger.info(f"Processing document: {document.filename}")
-            processed_chunks = await self.document_processor.process_document(document, file_path)
+            # Create a Pydantic schema object from the database model object
+            # to pass to the downstream processing services.
+            schema_document = SchemaDocument(
+                id=str(document.id),
+                filename=document.original_filename,
+                uuid_filename=document.uuid_filename,
+                file_type=document.file_type,
+                file_size=document.file_size,
+                upload_date=document.created_at,
+                processed=False  # This field isn't critical for processing
+            )
+            
+            logger.info(f"Processing document: {schema_document.filename}")
+            processed_chunks = await self.document_processor.process_document(schema_document, file_path)
             
             if not processed_chunks:
-                logger.warning(f"No chunks extracted from document: {document.filename}")
+                logger.warning(f"No chunks extracted from document: {schema_document.filename}")
                 return False
                 
             texts = [chunk["text"] for chunk in processed_chunks]
@@ -192,8 +205,8 @@ class EnhancedRAGService:
             return self.ollama_model
 
     def format_sse(self, data: dict) -> str:
-        """Format the data dictionary as a Server-Sent Events message"""
-        return f"data: {json.dumps(data)}\n\n"
+        """Format the data dictionary as a Server-Sent Events message."""
+        return f"data: {json.dumps(data)}\\n\\n"
     
     def _create_self_query_retriever(self, query: str) -> Optional[BaseRetriever]:
         """Create a self-query retriever for metadata filtering"""
@@ -550,7 +563,6 @@ class EnhancedRAGService:
                 model = self.get_current_model()
                 logger.info(f"Model initialized: {type(model)}")
 
-                # Create an enhanced system prompt for Gemma2:9b
                 system_prompt = """You are a helpful AI Study Buddy assistant. Your goal is to answer questions about the user's documents. 
                 
                 IMPORTANT INSTRUCTIONS:
@@ -635,6 +647,25 @@ class EnhancedRAGService:
                         "provider": provider
                     })
 
+                # After the main response, send the list of source documents so that
+                # downstream consumers (e.g. voice WebSocket) can mention them.
+                try:
+                    source_list = [
+                        {
+                            "filename": res.get("metadata", {}).get("filename", "Unknown"),
+                            "document_id": res.get("metadata", {}).get("document_id")
+                        }
+                        for res in search_results[:5]
+                    ]
+                except Exception:
+                    source_list = []
+
+                yield self.format_sse({
+                    "type": "sources",
+                    "sources": source_list,
+                    "provider": provider
+                })
+
                 # Signal completion
                 yield self.format_sse({
                     "type": "done",
@@ -656,6 +687,13 @@ class EnhancedRAGService:
                 "type": "error",
                 "content": f"Error in RAG pipeline: {str(e)}"
             })
+
+    def set_provider(self, provider: str):
+        """Set the model provider ('ollama' or 'gemini')"""
+        if provider not in ["ollama", "gemini"]:
+            logger.error(f"Invalid provider: {provider}")
+            raise ValueError("Invalid provider")
+        self.current_provider = provider
 
 
 

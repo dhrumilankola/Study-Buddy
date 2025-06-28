@@ -68,7 +68,7 @@ class ChatSession(Base):
     total_messages = Column(Integer, default=0, nullable=False)
 
     # Relationship to chat messages
-    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan", passive_deletes=True)
 
     # Many-to-many relationship with documents
     documents = relationship("Document", secondary=chat_session_documents, back_populates="chat_sessions")
@@ -81,7 +81,7 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
     
     id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
     message_content = Column(Text, nullable=False)
     response_content = Column(Text, nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

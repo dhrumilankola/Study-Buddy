@@ -67,47 +67,33 @@ export default function StatusIndicator() {
   }
 
   return (
-    <div className="rounded-lg border bg-card p-4 transition-all hover:shadow-md">
-      <div className="flex flex-col space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="font-medium text-card-foreground">System Status</h3>
-          <div className="flex items-center space-x-2">
+    <div className="rounded-lg border bg-card p-3 transition-all w-full max-w-full">
+      <div className="flex flex-col space-y-2 w-full max-w-full">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-medium text-card-foreground text-base">System Status</h3>
+          <div className="flex items-center space-x-1">
             <CheckCircle2 className="h-4 w-4 text-green-500" />
-            <span className="text-sm text-muted-foreground">Operational</span>
+            <span className="text-xs text-muted-foreground">Operational</span>
           </div>
         </div>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="flex items-center space-x-3 rounded-md bg-accent/50 p-3">
-            <Database className="h-4 w-4 text-primary" />
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">Documents Indexed</p>
-              <p className="font-medium">{status?.documents_indexed || 0}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-3 rounded-md bg-accent/50 p-3">
-            {getModelIcon(status?.current_provider)}
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">Active Model</p>
-              <p className="font-medium">{getModelName(status?.current_provider, status?.model_name)}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-3 rounded-md bg-accent/50 p-3">
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">Available Models</p>
-              <div className="flex space-x-2">
-                <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
-                  Ollama
-                </span>
-                {status?.providers_available?.gemini && (
-                  <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
-                    Gemini
-                  </span>
-                )}
-              </div>
-            </div>
+        <div className="flex items-center space-x-2">
+          <Database className="h-4 w-4 text-primary shrink-0" />
+          <span className="text-xs text-muted-foreground">Documents Indexed:</span>
+          <span className="font-medium text-sm">{status?.documents_indexed || 0}</span>
+        </div>
+        <div className="flex items-center space-x-2">
+          {getModelIcon(status?.llm_model?.provider)}
+          <span className="text-xs text-muted-foreground">Active Model:</span>
+          <span className="font-medium text-sm">{getModelName(status?.llm_model?.provider, status?.llm_model?.name)}</span>
+        </div>
+        <div className="flex items-center space-x-2 flex-wrap">
+          <Server className="h-4 w-4 text-primary shrink-0" />
+          <span className="text-xs text-muted-foreground">Available Models:</span>
+          <div className="flex flex-wrap gap-1">
+            <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Ollama</span>
+            {status?.providers_available?.gemini && (
+              <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Gemini</span>
+            )}
           </div>
         </div>
       </div>

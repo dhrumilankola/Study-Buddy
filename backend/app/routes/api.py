@@ -4,7 +4,7 @@ import uuid
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Annotated
 
 # --- Third-Party Imports ---
 import aiofiles
@@ -54,7 +54,7 @@ async def process_document_background(db_document: DBDocument, file_path: str):
             await db.commit()
 
         # Process the document using the RAG service
-        success = await rag_service.process_document_by_id(db_document.id, file_path)
+        success = await rag_service.process_document(db_document, file_path)
 
         # Update final status in the database
         async with get_db_session_context() as db:
@@ -216,7 +216,7 @@ async def query_documents(
         
         async def response_generator():
             async for chunk in rag_service.generate_response(query, session_uuid=session_uuid):
-                yield f"data: {json.dumps(chunk)}\n\n"
+                yield chunk
         
         return StreamingResponse(response_generator(), media_type="text/event-stream")
     except Exception as e:
@@ -224,11 +224,15 @@ async def query_documents(
         raise HTTPException(500, "Error querying documents")
 
 
-@router.get("/status")
-async def get_status(db: AsyncSession = Depends(get_db_session)):
-    """Get system status, including database and model info."""
+@router.get("/status", response_model=Dict[str, Any])
+async def get_status(
+    db: AsyncSession = Depends(get_db_session)
+):
+    """
+    Get system status, including database and model info.
+    """
     try:
-        doc_count = await DocumentService.get_total_document_count(db)
+        doc_count = await DocumentService.get_documents_count(db)
         providers_available = {
             "ollama": rag_service.ollama_model is not None,
             "gemini": rag_service.gemini_model is not None and settings.GOOGLE_API_KEY is not None
@@ -273,18 +277,13 @@ async def switch_model(model_config: LLMConfig):
 # Hume EVI and Voice RAG Endpoints
 # -----------------------------------------------------------------------------
 
-@router.get("/auth/hume-token")
-async def get_hume_token():
-    """Generate an access token for Hume EVI authentication."""
-    if not all([settings.HUME_API_KEY, settings.HUME_SECRET_KEY]):
-        raise HTTPException(503, "Hume AI is not configured.")
-    try:
-        token_data = create_hume_client_token()
-        config_id = await get_or_create_study_buddy_config()
-        return {**token_data, "config_id": config_id, "hostname": "api.hume.ai"}
-    except Exception as e:
-        logger.error(f"Error generating Hume token: {str(e)}")
-        raise HTTPException(500, "Failed to generate Hume authentication token")
+@router.get("/auth/hume-token", response_model=Dict[str, Any])
+async def get_hume_token(db: AsyncSession = Depends(get_db_session)):
+    """
+    Get a short-lived Hume client token and EVI configuration
+    """
+    token_data = await create_hume_client_token()
+    return token_data
 
 
 def format_response_for_voice(response: str, sources: List[Dict]) -> str:
@@ -307,12 +306,19 @@ async def websocket_voice_rag(
     await websocket.accept()
     logger.info(f"Voice RAG WebSocket connected for session: {session_uuid}")
     try:
+        last_transcription = None  # Track the last processed transcript to avoid duplicates
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
             
             if message.get("type") == "transcription" and message.get("text", "").strip():
                 transcription = message["text"].strip()
+
+                # Skip if identical to the last transcription received (helps with repeated interim duplicates)
+                if transcription == last_transcription:
+                    continue
+                last_transcription = transcription
+
                 logger.info(f"Processing transcription '{transcription}' for session '{session_uuid}'")
                 
                 await websocket.send_text(json.dumps({"type": "processing"}))
@@ -322,10 +328,26 @@ async def websocket_voice_rag(
                     full_response, sources = "", []
                     
                     async for chunk in rag_service.generate_response(query, session_uuid):
-                        if chunk.get("type") == "content":
-                            full_response += chunk.get("content", "")
-                        elif chunk.get("type") == "sources":
-                            sources = chunk.get("sources", [])
+                        # The RAG generator yields SSE-formatted strings ("data: {...}\n\n").
+                        # Convert them to dicts for easier handling.
+                        if isinstance(chunk, str):
+                            if chunk.startswith("data:"):
+                                try:
+                                    chunk_json = json.loads(chunk[5:].strip())
+                                except json.JSONDecodeError:
+                                    continue  # skip malformed chunk
+                            else:
+                                continue  # Not an SSE data line
+                        elif isinstance(chunk, dict):
+                            chunk_json = chunk
+                        else:
+                            continue
+
+                        if chunk_json.get("type") in {"response", "content"}:
+                            # Older versions used "content"; newer uses "response"
+                            full_response += chunk_json.get("content", "") or chunk_json.get("response", "")
+                        elif chunk_json.get("type") == "sources":
+                            sources = chunk_json.get("sources", [])
 
                     formatted_response = format_response_for_voice(full_response, sources)
                     
