@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Clock, Loader2 } from 'lucide-react';
-import { getAvailableDocuments, updateChatSession } from '../api';
+import { listDocuments, updateChatSession } from '../api';
 import DocumentSelector from './DocumentSelector';
 
 export default function SessionDocumentManager({ 
@@ -24,7 +24,7 @@ export default function SessionDocumentManager({
   const fetchAvailableDocuments = async () => {
     try {
       setLoading(true);
-      const documents = await getAvailableDocuments();
+      const documents = await listDocuments();
       setAvailableDocuments(documents);
     } catch (error) {
       console.error('Error fetching available documents:', error);

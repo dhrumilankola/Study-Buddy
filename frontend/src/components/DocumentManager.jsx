@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Upload, FileText, Trash2, RefreshCw, Search, Filter, Plus, Calendar, HardDrive, Package } from 'lucide-react';
 import FileUpload from './FileUpload';
 import DocumentList from './DocumentList';
-import { listDocuments, getAvailableDocuments, getDocumentStatus } from '../api';
+import { listDocuments, getDocumentStatus, deleteDocument } from '../api';
 
 export default function DocumentManager({ onDocumentSelect, selectedDocuments = [], showUploadTab = true }) {
   const [activeTab, setActiveTab] = useState(showUploadTab ? 'upload' : 'manage');
@@ -29,6 +29,21 @@ export default function DocumentManager({ onDocumentSelect, selectedDocuments = 
       console.error('Error fetching documents:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (document) => {
+    // Ask for confirmation
+    if (!window.confirm(`Are you sure you want to delete "${document.original_filename || document.filename}"?`)) {
+      return;
+    }
+
+    try {
+      await deleteDocument(document.id);
+      fetchDocuments(); // Refresh the document list
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      // You might want to show an error to the user
     }
   };
 
@@ -284,6 +299,7 @@ export default function DocumentManager({ onDocumentSelect, selectedDocuments = 
                   onDocumentSelect={onDocumentSelect}
                   selectedDocuments={selectedDocuments}
                   onRefresh={handleRefresh}
+                  onDelete={handleDelete}
                   showHeader={false}
                 />
               )}

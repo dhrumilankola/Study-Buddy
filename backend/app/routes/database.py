@@ -105,6 +105,8 @@ async def get_chat_sessions(
             ChatSessionResponse(
                 id=session.id,
                 session_uuid=session.session_uuid,
+                title=session.title,
+                session_type=session.session_type,
                 created_at=session.created_at,
                 last_activity=session.last_activity,
                 model_provider_used=session.model_provider_used,
@@ -130,6 +132,8 @@ async def get_chat_session(
         return ChatSessionResponse(
             id=session.id,
             session_uuid=session.session_uuid,
+            title=session.title,
+            session_type=session.session_type,
             created_at=session.created_at,
             last_activity=session.last_activity,
             model_provider_used=session.model_provider_used,

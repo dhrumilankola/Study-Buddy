@@ -7,6 +7,7 @@ export default function DocumentList({
   onDocumentSelect,
   selectedDocuments = [],
   onRefresh,
+  onDelete,
   showHeader = true,
   selectionMode = false,
   showDetailedView = true
@@ -336,24 +337,32 @@ export default function DocumentList({
                       </div>
                     )}
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(doc);
-                      }}
-                      disabled={deletingFiles.has(docId)}
-                      className="rounded-md p-2 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 disabled:opacity-50"
-                      title="Delete document"
-                    >
-                      {deletingFiles.has(docId) ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-destructive" />
-                      ) : (
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      )}
-                    </button>
+                    {!selectionMode && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onDelete) onDelete(doc);
+                        }}
+                        disabled={deletingFiles.has(docId)}
+                        className="absolute top-4 right-4 z-10 rounded-full p-1.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                        title="Delete document"
+                      >
+                        {deletingFiles.has(docId) ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
+
+              {showDetailedView && (
+                <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                  {/* Additional details for detailed view */}
+                </div>
+              )}
             </div>
           );
         })}

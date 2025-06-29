@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Search, Filter, Upload, FileText, CheckCircle2, AlertCircle, Clock, Loader2, Plus, Check } from 'lucide-react';
-import { getAvailableDocuments, uploadDocument, getDocumentStatus } from '../api';
+import { listDocuments, uploadDocument, getDocumentStatus } from '../api';
 
 export default function DocumentSelector({ 
   selectedDocuments = [], 
@@ -23,7 +23,7 @@ export default function DocumentSelector({
   const fetchDocuments = async () => {
     try {
       setLoading(true);
-      const data = await getAvailableDocuments();
+      const data = await listDocuments();
       setDocuments(data);
     } catch (error) {
       console.error('Error fetching documents:', error);

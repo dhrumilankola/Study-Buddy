@@ -11,8 +11,8 @@ import StatusIndicator from './components/StatusIndicator';
 import ChatSessionManager from './components/ChatSessionManager';
 import SessionDocuments from './components/SessionDocuments';
 import SessionDocumentManager from './components/SessionDocumentManager';
+import { getChatSession, endVoiceChat } from './api';
 
-// Create Material-UI theme
 const theme = createTheme({
   palette: {
     mode: 'light',
@@ -32,12 +32,12 @@ export default function App() {
   const [showUpload, setShowUpload] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [currentSessionData, setCurrentSessionData] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [showDocumentManager, setShowDocumentManager] = useState(false);
   const [sessionDocuments, setSessionDocuments] = useState([]);
 
-  // Handle view transitions
   const handleNavigation = (view) => {
     if (view === currentView && !showUpload) return;
     
@@ -46,10 +46,9 @@ export default function App() {
       setCurrentView(view);
       setShowUpload(false);
       setIsTransitioning(false);
-    }, 150); // Match this with CSS transition duration
+    }, 150);
   };
 
-  // Handle upload modal
   const handleUploadClick = () => {
     setIsTransitioning(true);
     setTimeout(() => {
@@ -58,38 +57,63 @@ export default function App() {
     }, 150);
   };
 
-  // Handle upload completion
   const handleUploadComplete = () => {
     setIsTransitioning(true);
     setTimeout(() => {
       setShowUpload(false);
-      setCurrentView('documents'); // Navigate to documents view after upload
+      setCurrentView('documents');
       setIsTransitioning(false);
     }, 150);
   };
 
-  // Handle session selection
-  const handleSessionSelect = (sessionUuid) => {
-    setCurrentSessionId(sessionUuid);
-    setCurrentView('chat');
-    // Close sidebar on mobile when session is selected
-    if (isMobile) {
-      setSidebarOpen(false);
+  const handleSessionSelect = async (sessionUuid) => {
+    try {
+      setCurrentSessionId(sessionUuid);
+      setCurrentView('chat');
+      
+      if (isMobile) {
+        setSidebarOpen(false);
+      }
+
+      const sessionData = await getChatSession(sessionUuid);
+      setCurrentSessionData(sessionData);
+    } catch (error) {
+      console.error('Error fetching session data:', error);
+      setCurrentSessionData(null);
     }
   };
 
-  // Handle new session creation
-  const handleNewSession = (session) => {
-    setCurrentSessionId(session.session_uuid);
-    setCurrentView('chat');
+  const handleNewSession = async (session) => {
+    try {
+      setCurrentSessionId(session.session_uuid);
+      setCurrentView('chat');
+      
+      const sessionData = await getChatSession(session.session_uuid);
+      setCurrentSessionData(sessionData);
+    } catch (error) {
+      console.error('Error fetching new session data:', error);
+      setCurrentSessionData(session);
+    }
   };
 
-  // Handle document management
+  const handleSwitchToVoice = () => {
+    setCurrentView('chat');
+    alert("Please create a new Voice Chat session to use voice features.");
+  };
+
+  const handleEndVoiceSession = async (sessionUuid) => {
+    try {
+      await endVoiceChat(sessionUuid);
+      console.log('Voice session ended successfully');
+    } catch (error) {
+      console.error('Error ending voice session:', error);
+    }
+  };
+
   const handleManageDocuments = (sessionUuid) => {
     setShowDocumentManager(true);
   };
 
-  // Check for mobile screen size
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
@@ -103,7 +127,6 @@ export default function App() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Handle escape key to close upload
   useEffect(() => {
     const handleEscape = (e) => {
       if (e.key === 'Escape' && showUpload) {
@@ -130,7 +153,12 @@ export default function App() {
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <StatusIndicator />
             <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-              <ChatInterface sessionUuid={currentSessionId} />
+              <ChatInterface 
+                sessionUuid={currentSessionId}
+                sessionData={currentSessionData}
+                onSwitchToVoice={handleSwitchToVoice}
+                onEndVoiceSession={handleEndVoiceSession}
+              />
             </Box>
           </Box>
         );
@@ -156,7 +184,6 @@ export default function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box sx={{ display: 'flex', height: '100vh' }}>
-        {/* App Bar */}
         <AppBar
           position="fixed"
           sx={{
@@ -178,13 +205,17 @@ export default function App() {
             </IconButton>
             <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
               Study Buddy
+              {currentSessionData && (
+                <Typography variant="caption" sx={{ ml: 2, opacity: 0.8 }}>
+                  {currentSessionData.session_type === 'voice' ? '🎙️ Voice' : '💬 Text'} Session
+                </Typography>
+              )}
             </Typography>
           </Toolbar>
         </AppBar>
 
-        {/* Sidebar */}
         <Drawer
-          variant={isMobile ? "temporary" : "persistent"}
+          variant={isMobile ? 'temporary' : 'persistent'}
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           sx={{
@@ -196,39 +227,53 @@ export default function App() {
             },
           }}
         >
-          <Toolbar /> {/* Spacer for app bar */}
-          <ChatSessionManager
-            onSessionSelect={handleSessionSelect}
-            currentSessionId={currentSessionId}
-            onNewSession={handleNewSession}
-            onManageDocuments={handleManageDocuments}
-          />
+          <Toolbar />
+          <Box sx={{ overflow: 'auto', height: '100%' }}>
+            <Layout
+              currentView={currentView}
+              onNavigate={handleNavigation}
+              onUpload={handleUploadClick}
+              showUpload={showUpload}
+              isTransitioning={isTransitioning}
+            />
+            <ChatSessionManager
+              onSessionSelect={handleSessionSelect}
+              onSessionCreated={handleNewSession}
+              currentSessionId={currentSessionId}
+              onManageDocuments={handleManageDocuments}
+            />
+          </Box>
         </Drawer>
 
-        {/* Main Content */}
         <Box
           component="main"
           sx={{
             flexGrow: 1,
+            display: 'flex',
+            flexDirection: 'column',
             height: '100vh',
-            overflow: 'hidden',
-            ml: sidebarOpen && !isMobile ? 0 : 0,
-            transition: 'margin 0.3s'
+            ml: sidebarOpen && !isMobile ? 0 : `-${DRAWER_WIDTH}px`,
+            transition: 'margin 0.3s',
           }}
         >
-          <Toolbar /> {/* Spacer for app bar */}
-          <Box sx={{ height: 'calc(100vh - 64px)', overflow: 'hidden' }}>
+          <Toolbar />
+          <Box
+            sx={{
+              flexGrow: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              opacity: isTransitioning ? 0 : 1,
+              transition: 'opacity 0.15s ease-in-out',
+            }}
+          >
             {renderMainContent()}
           </Box>
         </Box>
 
-        {/* Session Document Manager Modal */}
         <SessionDocumentManager
-          sessionUuid={currentSessionId}
-          sessionDocuments={sessionDocuments}
-          onDocumentsUpdate={setSessionDocuments}
           isOpen={showDocumentManager}
           onClose={() => setShowDocumentManager(false)}
+          sessionUuid={currentSessionId}
         />
       </Box>
     </ThemeProvider>
