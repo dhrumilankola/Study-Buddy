@@ -1,16 +1,12 @@
-"""
-Database service layer for Study Buddy application.
-"""
-
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, func
+from sqlalchemy import select, update, delete
 from sqlalchemy.orm import selectinload
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from datetime import datetime
 import uuid
 import logging
 
-from app.database.models import Document, ChatSession, ChatMessage, ProcessingStatus, ModelProvider
+from app.database.models import Document, ChatSession, ChatMessage, ProcessingStatus, ModelProvider, SessionType
 
 logger = logging.getLogger(__name__)
 
@@ -21,26 +17,22 @@ class DocumentService:
     async def create_document(
         session: AsyncSession,
         original_filename: str,
+        uuid_filename: str,
         file_type: str,
-        file_size: int,
-        uuid_filename: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        file_size: int
     ) -> Document:
         """Create a new document record"""
-        if uuid_filename is None:
-            uuid_filename = str(uuid.uuid4())
-        
         document = Document(
             original_filename=original_filename,
             uuid_filename=uuid_filename,
             file_type=file_type,
             file_size=file_size,
-            document_metadata=metadata or {}
+            processing_status=ProcessingStatus.PROCESSING
         )
         
         session.add(document)
-        await session.flush()  # Get the ID without committing
-        logger.info(f"Created document record: {document.id}")
+        await session.flush()
+        logger.info(f"Created document: {original_filename} with UUID: {uuid_filename}")
         return document
     
     @staticmethod
@@ -49,17 +41,6 @@ class DocumentService:
         result = await session.execute(select(Document).where(Document.id == document_id))
         return result.scalar_one_or_none()
     
-    @staticmethod
-    async def get_document_by_uuid(session: AsyncSession, uuid_filename: str) -> Optional[Document]:
-        """Get document by UUID filename"""
-        result = await session.execute(select(Document).where(Document.uuid_filename == uuid_filename))
-        return result.scalar_one_or_none()
-
-    @staticmethod
-    async def get_document_by_uuid_filename(session: AsyncSession, uuid_filename: str) -> Optional[Document]:
-        """Get document by UUID filename (alias for compatibility)"""
-        return await DocumentService.get_document_by_uuid(session, uuid_filename)
-
     @staticmethod
     async def get_all_documents(session: AsyncSession, limit: int = 100, offset: int = 0) -> List[Document]:
         """Get all documents with pagination"""
@@ -70,60 +51,51 @@ class DocumentService:
             .offset(offset)
         )
         return result.scalars().all()
-
+    
     @staticmethod
     async def update_document_status(
         session: AsyncSession,
         document_id: int,
         status: ProcessingStatus,
-        chunk_count: Optional[int] = None,
-        vector_store_ids: Optional[List[str]] = None
+        chunk_count: Optional[int] = None
     ) -> bool:
         """Update document processing status"""
-        update_data = {"processing_status": status, "updated_at": datetime.utcnow()}
-
+        update_values = {"processing_status": status}
         if chunk_count is not None:
-            update_data["chunk_count"] = chunk_count
-        if vector_store_ids is not None:
-            update_data["vector_store_ids"] = vector_store_ids
-
+            update_values["chunk_count"] = chunk_count
+            
         result = await session.execute(
             update(Document)
             .where(Document.id == document_id)
-            .values(**update_data)
+            .values(**update_values)
         )
-
+        
         success = result.rowcount > 0
         if success:
             logger.info(f"Updated document {document_id} status to {status}")
         return success
-
-    @staticmethod
-    async def update_document_chunks(
-        session: AsyncSession,
-        document_id: int,
-        chunk_count: int
-    ) -> bool:
-        """Update document chunk count"""
-        result = await session.execute(
-            update(Document)
-            .where(Document.id == document_id)
-            .values(chunk_count=chunk_count, updated_at=datetime.utcnow())
-        )
-
-        success = result.rowcount > 0
-        if success:
-            logger.info(f"Updated document {document_id} chunk count to {chunk_count}")
-        return success
-
+    
     @staticmethod
     async def delete_document(session: AsyncSession, document_id: int) -> bool:
-        """Delete a document record"""
-        result = await session.execute(delete(Document).where(Document.id == document_id))
-        success = result.rowcount > 0
-        if success:
-            logger.info(f"Deleted document {document_id}")
-        return success
+        """Delete a document record and its associations"""
+        # First, retrieve the document with its chat session relationships
+        result = await session.execute(
+            select(Document).options(selectinload(Document.chat_sessions)).where(Document.id == document_id)
+        )
+        document = result.scalar_one_or_none()
+
+        if not document:
+            logger.warning(f"Attempted to delete non-existent document with ID {document_id}")
+            return False
+
+        # Manually clear the many-to-many relationship
+        document.chat_sessions.clear()
+        
+        # Now, delete the document itself
+        await session.delete(document)
+        
+        logger.info(f"Deleted document {document_id} and its associations")
+        return True
 
 class ChatService:
     """Service for chat-related database operations"""
@@ -133,21 +105,27 @@ class ChatService:
         session: AsyncSession,
         session_uuid: Optional[str] = None,
         title: Optional[str] = None,
-        document_ids: Optional[List[int]] = None
+        document_ids: Optional[List[int]] = None,
+        session_type: str = 'text'
     ) -> ChatSession:
         """Create a new chat session with optional document associations"""
         if session_uuid is None:
             session_uuid = str(uuid.uuid4())
 
-        chat_session = ChatSession(session_uuid=session_uuid, title=title)
-        session.add(chat_session)
-        await session.flush()  # Get the ID
+        session_type_enum = SessionType.VOICE if session_type == 'voice' else SessionType.TEXT
 
-        # Associate documents if provided
+        chat_session = ChatSession(
+            session_uuid=session_uuid, 
+            title=title,
+            session_type=session_type_enum
+        )
+        session.add(chat_session)
+        await session.flush()
+
         if document_ids:
             await ChatService.add_documents_to_session(session, chat_session.id, document_ids)
 
-        logger.info(f"Created chat session: {chat_session.session_uuid} with {len(document_ids or [])} documents")
+        logger.info(f"Created {session_type} chat session: {chat_session.session_uuid} with {len(document_ids or [])} documents")
         return chat_session
     
     @staticmethod
@@ -192,7 +170,6 @@ class ChatService:
         
         session.add(message)
         
-        # Update session message count and last activity
         await session.execute(
             update(ChatSession)
             .where(ChatSession.id == session_id)
@@ -232,9 +209,9 @@ class ChatService:
         )
         success = result.rowcount > 0
         if success:
-            logger.info(f"Deleted chat session {session_uuid}")
+            logger.info(f"Deleted session {session_uuid}")
         return success
-
+    
     @staticmethod
     async def add_documents_to_session(
         session: AsyncSession,
@@ -243,7 +220,6 @@ class ChatService:
     ) -> bool:
         """Add documents to a chat session"""
         try:
-            # Get the chat session with documents relationship loaded
             result = await session.execute(
                 select(ChatSession)
                 .options(selectinload(ChatSession.documents))
@@ -255,19 +231,14 @@ class ChatService:
                 logger.error(f"Chat session {session_id} not found")
                 return False
 
-            # Get the documents
-            documents_result = await session.execute(
-                select(Document).where(Document.id.in_(document_ids))
-            )
-            documents = documents_result.scalars().all()
-
-            # Add documents to session (SQLAlchemy handles the association table)
-            for document in documents:
-                if document not in chat_session.documents:
+            for doc_id in document_ids:
+                doc_result = await session.execute(select(Document).where(Document.id == doc_id))
+                document = doc_result.scalar_one_or_none()
+                if document and document not in chat_session.documents:
                     chat_session.documents.append(document)
 
             await session.flush()
-            logger.info(f"Added {len(documents)} documents to session {session_id}")
+            logger.info(f"Added {len(document_ids)} documents to session {session_id}")
             return True
 
         except Exception as e:
@@ -282,7 +253,6 @@ class ChatService:
     ) -> bool:
         """Remove documents from a chat session"""
         try:
-            # Get the chat session with documents
             result = await session.execute(
                 select(ChatSession)
                 .options(selectinload(ChatSession.documents))
@@ -294,7 +264,6 @@ class ChatService:
                 logger.error(f"Chat session {session_id} not found")
                 return False
 
-            # Remove documents from session
             documents_to_remove = [doc for doc in chat_session.documents if doc.id in document_ids]
             for document in documents_to_remove:
                 chat_session.documents.remove(document)

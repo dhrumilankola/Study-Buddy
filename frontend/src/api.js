@@ -13,7 +13,7 @@ export const switchModel = async (provider) => {
     try {
       const response = await api.post('/model/switch', {
         provider: provider,
-        temperature: 0.7, // Using default temperature
+        temperature: 0.7,
       });
       return response.data;
     } catch (error) {
@@ -30,7 +30,6 @@ export const uploadDocument = async (file) => {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-      // Add progress tracking
       onUploadProgress: (progressEvent) => {
         const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
         console.log(`Upload Progress: ${percentCompleted}%`);
@@ -77,7 +76,6 @@ export const getDocumentStatus = async (documentId) => {
 
 export const queryDocuments = async (question, contextWindow = 3, modelProvider = null, sessionUuid = null) => {
     try {
-      // Build URL with session UUID if provided
       let url = `${API_BASE_URL}/query/`;
       if (sessionUuid) {
         url += `?session_uuid=${encodeURIComponent(sessionUuid)}`;
@@ -89,7 +87,7 @@ export const queryDocuments = async (question, contextWindow = 3, modelProvider 
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          question: question,
+          query: question,
           context_window: contextWindow,
           model_provider: modelProvider
         })
@@ -99,7 +97,7 @@ export const queryDocuments = async (question, contextWindow = 3, modelProvider 
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      return response; // Return the response directly for streaming
+      return response;
     } catch (error) {
       throw new Error(error.message || 'Error querying documents');
     }
@@ -123,7 +121,6 @@ export const deleteDocument = async (documentId) => {
     }
   };
 
-// Legacy function for backward compatibility
 export const deleteDocumentByFilename = async (filename) => {
     try {
       const response = await fetch(`${API_BASE_URL}/documents/by-filename/${encodeURIComponent(filename)}`, {
@@ -141,7 +138,6 @@ export const deleteDocumentByFilename = async (filename) => {
     }
   };
 
-// Chat Session Management API
 export const getChatSessions = async (limit = 20) => {
   try {
     const response = await api.get('/chat/sessions', {
@@ -153,12 +149,13 @@ export const getChatSessions = async (limit = 20) => {
   }
 };
 
-export const createChatSession = async (title = null, documentIds = [], modelProvider = null) => {
+export const createChatSession = async (title = null, documentIds = [], modelProvider = null, sessionType = 'text') => {
   try {
     const response = await api.post('/chat/sessions', {
       title,
       document_ids: documentIds,
-      model_provider: modelProvider
+      model_provider: modelProvider,
+      session_type: sessionType
     });
     return response.data;
   } catch (error) {
@@ -197,14 +194,23 @@ export const deleteChatSession = async (sessionUuid) => {
   }
 };
 
-export const saveChatMessage = async (sessionUuid, messageContent, responseContent = null, modelProvider = null, tokenCount = null, processingTimeMs = null) => {
+export const getChatMessages = async (sessionUuid) => {
+  try {
+    const response = await api.get(`/chat/sessions/${sessionUuid}/messages`);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error fetching chat messages');
+  }
+};
+
+export const saveChatMessage = async (sessionUuid, messageContent, responseContent, modelProvider, tokenCount, processingTime) => {
   try {
     const response = await api.post(`/chat/sessions/${sessionUuid}/messages`, {
       message_content: messageContent,
       response_content: responseContent,
       model_provider: modelProvider,
       token_count: tokenCount,
-      processing_time_ms: processingTimeMs
+      processing_time_ms: processingTime
     });
     return response.data;
   } catch (error) {
@@ -212,22 +218,33 @@ export const saveChatMessage = async (sessionUuid, messageContent, responseConte
   }
 };
 
-export const getChatMessages = async (sessionUuid, limit = 50, offset = 0) => {
+export const startVoiceChat = async (title, documentIds) => {
   try {
-    const response = await api.get(`/chat/sessions/${sessionUuid}/messages`, {
-      params: { limit, offset }
+    const response = await api.post('/voice-chat/start-session', {
+      title,
+      document_ids: documentIds,
+      session_type: 'voice'
     });
     return response.data;
   } catch (error) {
-    throw new Error(error.response?.data?.detail || 'Error fetching chat messages');
+    throw new Error(error.response?.data?.detail || 'Error starting voice chat');
   }
 };
 
-export const getAvailableDocuments = async () => {
+export const endVoiceChat = async (sessionUuid) => {
   try {
-    const response = await api.get('/chat/available-documents');
+    const response = await api.post(`/voice-chat/end-session/${sessionUuid}`);
     return response.data;
   } catch (error) {
-    throw new Error(error.response?.data?.detail || 'Error fetching available documents');
+    throw new Error(error.response?.data?.detail || 'Error ending voice chat');
   }
+};
+
+export const getVoiceChatConfig = async () => {
+    try {
+        const response = await api.get('/voice-chat/config');
+        return response.data;
+    } catch (error) {
+        throw new Error(error.response?.data?.detail || 'Error getting voice chat config');
+    }
 };

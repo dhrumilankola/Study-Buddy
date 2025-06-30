@@ -1,0 +1,81 @@
+:root {
+  /* Brand colours */
+  --gradient-from: #00c08b; /* ChatGPT teal */
+  --gradient-to: #2d8cff;   /* Gemini blue */
+
+  /* Base palette – LIGHT MODE */
+  --background: 0 0% 100%;          /* white */
+  --foreground: 0 0% 8%;            /* almost black */
+
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 8%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 8%;
+
+  /* Accent colours (for small highlights like buttons) */
+  --primary: 164 90% 40%;           /* teal */
+  --primary-foreground: 210 40% 98%;
+
+  --secondary: 217 100% 55%;        /* blue */
+  --secondary-foreground: 210 40% 98%;
+
+  --muted: 0 0% 96%;
+  --muted-foreground: 0 0% 35%;
+
+  --accent: 196 85% 93%;
+  --accent-foreground: 0 0% 20%;
+
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 0 0% 90%;
+  --input: 0 0% 90%;
+  --ring: 164 90% 40%;
+
+  --radius: 0.75rem;
+}
+
+/* DARK MODE */
+[data-theme='dark'], .dark {
+  --background: 0 0% 0%;            /* black */
+  --foreground: 0 0% 96%;           /* near-white */
+
+  --card: 0 0% 10%;
+  --card-foreground: 0 0% 96%;
+
+  --popover: 0 0% 10%;
+  --popover-foreground: 0 0% 96%;
+
+  --primary: 164 90% 40%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+
+  --secondary: 217 100% 55%;
+  --secondary-foreground: 210 40% 98%;
+
+  --muted: 0 0% 20%;
+  --muted-foreground: 0 0% 70%;
+
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+
+  --destructive: 0 62.8% 45%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 0 0% 15%;
+  --input: 0 0% 15%;
+  --ring: 164 90% 40%;
+}
+
+/* Gradient utility */
+.bg-gradient-brand {
+  background-image: linear-gradient(90deg, var(--gradient-from), var(--gradient-to));
+}
+
+.text-gradient-brand {
+  background-image: linear-gradient(90deg, var(--gradient-from), var(--gradient-to));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: transparent;
+} 

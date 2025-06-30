@@ -1,186 +1,58 @@
 import { useState, useEffect } from 'react';
-import { 
-  Dialog, 
-  DialogTitle, 
-  DialogContent, 
-  DialogActions, 
-  Button, 
-  TextField, 
-  Typography, 
-  Box, 
-  Tabs, 
-  Tab, 
-  Alert,
-  Chip,
-  Card,
-  CardContent,
-  LinearProgress,
-  IconButton
-} from '@mui/material';
-import {
-  Upload as UploadIcon,
-  Description as DocumentIcon,
-  CheckCircle as CheckCircleIcon,
-  Error as ErrorIcon,
-  Refresh as RefreshIcon,
-  Close as CloseIcon
-} from '@mui/icons-material';
-import { uploadDocument, getAvailableDocuments, createChatSession, getDocumentStatus } from '../api';
+import { X, Upload, File, MessageSquare, Mic, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { createChatSession, startVoiceChat, listDocuments, uploadDocument } from '../api';
 
-export default function EnhancedSessionCreator({ 
-  open, 
-  onClose, 
-  onSessionCreated 
-}) {
-  const [activeTab, setActiveTab] = useState(0);
+export default function EnhancedSessionCreator({ open, onClose, onSessionCreated }) {
   const [sessionTitle, setSessionTitle] = useState('');
+  const [sessionType, setSessionType] = useState('text');
   const [selectedDocuments, setSelectedDocuments] = useState([]);
   const [availableDocuments, setAvailableDocuments] = useState([]);
-  const [uploadedFiles, setUploadedFiles] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState(0);
+  const [uploadFiles, setUploadFiles] = useState([]);
   const [dragActive, setDragActive] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({});
 
   useEffect(() => {
     if (open) {
-      fetchAvailableDocuments();
+      fetchDocuments();
+      setSessionTitle('');
+      setSessionType('text');
+      setSelectedDocuments([]);
+      setActiveTab(0);
+      setUploadFiles([]);
+      setError('');
     }
   }, [open]);
 
-  const fetchAvailableDocuments = async () => {
+  const fetchDocuments = async () => {
     try {
-      const documents = await getAvailableDocuments();
-      setAvailableDocuments(documents);
+      const docs = await listDocuments();
+      setAvailableDocuments(docs.filter(doc => doc.processing_status === 'indexed'));
     } catch (err) {
-      setError('Failed to load available documents');
+      console.error('Error fetching documents:', err);
     }
-  };
-
-  const handleFileUpload = async (files) => {
-    const fileArray = Array.from(files);
-    
-    for (const file of fileArray) {
-      const fileId = Date.now() + Math.random();
-      
-      // Add file to upload list with pending status
-      setUploadedFiles(prev => [...prev, {
-        id: fileId,
-        file,
-        status: 'uploading',
-        progress: 0,
-        documentId: null,
-        error: null
-      }]);
-
-      try {
-        // Upload file
-        const response = await uploadDocument(file);
-        
-        // Update file status to uploaded
-        setUploadedFiles(prev => prev.map(f => 
-          f.id === fileId 
-            ? { 
-                ...f, 
-                status: 'processing', 
-                progress: 100,
-                documentId: response.document?.id,
-                processingStatus: response.document?.processing_status || 'processing'
-              }
-            : f
-        ));
-
-        // Start polling for processing status
-        if (response.document?.id) {
-          pollDocumentStatus(response.document.id, fileId);
-        }
-
-      } catch (err) {
-        setUploadedFiles(prev => prev.map(f => 
-          f.id === fileId 
-            ? { ...f, status: 'error', error: err.message }
-            : f
-        ));
-      }
-    }
-  };
-
-  const pollDocumentStatus = async (documentId, fileId) => {
-    const maxAttempts = 30; // 30 seconds max
-    let attempts = 0;
-
-    const poll = async () => {
-      try {
-        const status = await getDocumentStatus(documentId);
-        
-        setUploadedFiles(prev => prev.map(f => 
-          f.id === fileId 
-            ? { ...f, processingStatus: status.processing_status }
-            : f
-        ));
-
-        if (status.processing_status === 'indexed') {
-          // Document is ready, add to available documents
-          await fetchAvailableDocuments();
-          setUploadedFiles(prev => prev.map(f => 
-            f.id === fileId 
-              ? { ...f, status: 'ready' }
-              : f
-          ));
-        } else if (status.processing_status === 'error' || status.processing_status === 'failed') {
-          setUploadedFiles(prev => prev.map(f => 
-            f.id === fileId 
-              ? { ...f, status: 'error', error: 'Processing failed' }
-              : f
-          ));
-        } else if (attempts < maxAttempts) {
-          attempts++;
-          setTimeout(poll, 1000); // Poll every second
-        }
-      } catch (err) {
-        console.error('Error polling document status:', err);
-      }
-    };
-
-    poll();
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragActive(false);
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      handleFileUpload(files);
-    }
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setDragActive(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setDragActive(false);
-  };
-
-  const toggleDocumentSelection = (documentId) => {
-    setSelectedDocuments(prev => 
-      prev.includes(documentId)
-        ? prev.filter(id => id !== documentId)
-        : [...prev, documentId]
-    );
   };
 
   const handleCreateSession = async () => {
+    if (!sessionTitle.trim()) {
+      setError('Please enter a session title');
+      return;
+    }
+
     try {
       setLoading(true);
-      const session = await createChatSession(
-        sessionTitle || null,
-        selectedDocuments,
-        null
-      );
-      
-      onSessionCreated(session);
+      setError('');
+
+      let session;
+      if (sessionType === 'voice') {
+        session = await startVoiceChat(sessionTitle, selectedDocuments);
+      } else {
+        session = await createChatSession(sessionTitle, selectedDocuments, null, 'text');
+      }
+
+      onSessionCreated({ ...session, session_type: sessionType });
       handleClose();
     } catch (err) {
       setError(err.message);
@@ -191,219 +63,297 @@ export default function EnhancedSessionCreator({
 
   const handleClose = () => {
     setSessionTitle('');
+    setSessionType('text');
     setSelectedDocuments([]);
-    setUploadedFiles([]);
     setActiveTab(0);
-    setError(null);
+    setUploadFiles([]);
+    setError('');
+    setUploadProgress({});
     onClose();
   };
 
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'indexed':
-        return <CheckCircleIcon color="success" />;
-      case 'processing':
-        return <RefreshIcon className="animate-spin" color="primary" />;
-      case 'error':
-      case 'failed':
-        return <ErrorIcon color="error" />;
-      default:
-        return <RefreshIcon color="action" />;
+  const toggleDocumentSelection = (docId) => {
+    setSelectedDocuments(prev => 
+      prev.includes(docId) 
+        ? prev.filter(id => id !== docId)
+        : [...prev, docId]
+    );
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer.files);
+    setUploadFiles(prev => [...prev, ...files]);
+  };
+
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files);
+    setUploadFiles(prev => [...prev, ...files]);
+  };
+
+  const uploadFile = async (file) => {
+    try {
+      setUploadProgress(prev => ({ ...prev, [file.name]: 0 }));
+      const result = await uploadDocument(file);
+      setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+      return result;
+    } catch (err) {
+      setUploadProgress(prev => ({ ...prev, [file.name]: -1 }));
+      throw err;
     }
   };
 
+  const handleUploadAndAdd = async () => {
+    try {
+      setLoading(true);
+      const uploadPromises = uploadFiles.map(file => uploadFile(file));
+      const uploadedDocs = await Promise.all(uploadPromises);
+      
+      const newDocIds = uploadedDocs.map(doc => doc.id);
+      setSelectedDocuments(prev => [...prev, ...newDocIds]);
+      setUploadFiles([]);
+      setUploadProgress({});
+      
+      await fetchDocuments();
+      setActiveTab(0);
+    } catch (err) {
+      setError('Some files failed to upload');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!open) return null;
+
   const readyDocuments = availableDocuments.filter(doc => doc.processing_status === 'indexed');
-  const canCreateSession = selectedDocuments.length > 0 || readyDocuments.length === 0;
 
   return (
-    <Dialog 
-      open={open} 
-      onClose={handleClose}
-      maxWidth="md"
-      fullWidth
-      PaperProps={{
-        sx: { minHeight: '600px' }
-      }}
-    >
-      <DialogTitle>
-        <Box display="flex" justifyContent="space-between" alignItems="center">
-          Create New Chat Session
-          <IconButton onClick={handleClose} size="small">
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
-      
-      <DialogContent>
-        <TextField
-          autoFocus
-          margin="dense"
-          label="Session Title (optional)"
-          fullWidth
-          variant="outlined"
-          value={sessionTitle}
-          onChange={(e) => setSessionTitle(e.target.value)}
-          sx={{ mb: 3 }}
-        />
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-background rounded-lg shadow-lg w-full max-w-2xl max-h-[85vh] overflow-hidden">
+        <div className="flex items-center justify-between p-6 border-b">
+          <h2 className="text-xl font-semibold">Create New Chat Session</h2>
+          <button
+            onClick={handleClose}
+            className="rounded-md p-2 hover:bg-secondary transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
 
-        <Typography variant="h6" gutterBottom>
-          Document Selection
-        </Typography>
+        <div className="p-6 space-y-6 overflow-y-auto max-h-[calc(85vh-140px)]">
+          <div>
+            <label className="block text-sm font-medium mb-2">Session Title</label>
+            <input
+              type="text"
+              value={sessionTitle}
+              onChange={(e) => setSessionTitle(e.target.value)}
+              placeholder="Enter session title..."
+              className="w-full px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
 
-        <Tabs 
-          value={activeTab} 
-          onChange={(e, newValue) => setActiveTab(newValue)}
-          sx={{ mb: 2 }}
-        >
-          <Tab label={`Select Existing (${readyDocuments.length})`} />
-          <Tab label="Upload New Documents" />
-        </Tabs>
+          <div>
+            <label className="block text-sm font-medium mb-3">Session Type</label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setSessionType('text')}
+                className={`p-4 rounded-lg border-2 transition-all ${
+                  sessionType === 'text'
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border hover:border-primary/50'
+                }`}
+              >
+                <MessageSquare className="h-6 w-6 mx-auto mb-2" />
+                <div className="font-medium">Text Chat</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Traditional text-based conversation
+                </div>
+              </button>
 
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-            {error}
-          </Alert>
-        )}
+              <button
+                onClick={() => setSessionType('voice')}
+                className={`p-4 rounded-lg border-2 transition-all ${
+                  sessionType === 'voice'
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border hover:border-primary/50'
+                }`}
+              >
+                <Mic className="h-6 w-6 mx-auto mb-2" />
+                <div className="font-medium">Voice Chat</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  AI-powered voice conversation
+                </div>
+              </button>
+            </div>
+          </div>
 
-        {/* Tab 0: Select Existing Documents */}
-        {activeTab === 0 && (
-          <Box sx={{ maxHeight: 300, overflow: 'auto' }}>
-            {readyDocuments.length === 0 ? (
-              <Alert severity="info">
-                No processed documents available. Upload some documents first.
-              </Alert>
-            ) : (
-              readyDocuments.map((doc) => (
-                <Card 
-                  key={doc.id} 
-                  variant="outlined" 
-                  sx={{ 
-                    mb: 1, 
-                    cursor: 'pointer',
-                    border: selectedDocuments.includes(doc.id) ? 2 : 1,
-                    borderColor: selectedDocuments.includes(doc.id) ? 'primary.main' : 'divider'
-                  }}
-                  onClick={() => toggleDocumentSelection(doc.id)}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-sm font-medium">Documents</label>
+              <div className="flex rounded-md overflow-hidden border">
+                <button
+                  onClick={() => setActiveTab(0)}
+                  className={`px-3 py-1 text-xs transition-colors ${
+                    activeTab === 0
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted hover:bg-muted/80'
+                  }`}
                 >
-                  <CardContent sx={{ py: 1.5 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <DocumentIcon color="action" />
-                      <Typography variant="body2" sx={{ flex: 1 }} noWrap>
-                        {doc.original_filename}
-                      </Typography>
-                      <Chip 
-                        label="Ready"
-                        size="small"
-                        color="success"
-                        icon={<CheckCircleIcon />}
-                      />
-                    </Box>
-                    <Typography variant="caption" color="text.secondary">
-                      {(doc.file_size / 1024).toFixed(1)} KB • {doc.chunk_count} chunks
-                    </Typography>
-                  </CardContent>
-                </Card>
-              ))
+                  Select ({readyDocuments.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab(1)}
+                  className={`px-3 py-1 text-xs transition-colors ${
+                    activeTab === 1
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted hover:bg-muted/80'
+                  }`}
+                >
+                  Upload New
+                </button>
+              </div>
+            </div>
+
+            {activeTab === 0 && (
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {readyDocuments.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <File className="h-8 w-8 mx-auto mb-2" />
+                    <p>No processed documents available</p>
+                    <p className="text-xs">Upload documents first</p>
+                  </div>
+                ) : (
+                  readyDocuments.map((doc) => (
+                    <div
+                      key={doc.id}
+                      onClick={() => toggleDocumentSelection(doc.id)}
+                      className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                        selectedDocuments.includes(doc.id)
+                          ? 'border-primary bg-primary/10'
+                          : 'border-border hover:border-primary/50'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <File className="h-4 w-4 text-primary" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{doc.original_filename}</p>
+                          <div className="flex items-center space-x-2 text-xs text-muted-foreground">
+                            <CheckCircle className="h-3 w-3 text-green-500" />
+                            <span>Ready • {doc.chunk_count} chunks</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
-          </Box>
-        )}
 
-        {/* Tab 1: Upload New Documents */}
-        {activeTab === 1 && (
-          <Box>
-            {/* Upload Area */}
-            <Box
-              sx={{
-                border: 2,
-                borderStyle: 'dashed',
-                borderColor: dragActive ? 'primary.main' : 'grey.300',
-                borderRadius: 2,
-                p: 4,
-                textAlign: 'center',
-                bgcolor: dragActive ? 'primary.50' : 'grey.50',
-                cursor: 'pointer',
-                mb: 2
-              }}
-              onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onClick={() => document.getElementById('file-upload').click()}
-            >
-              <input
-                id="file-upload"
-                type="file"
-                multiple
-                accept=".pdf,.txt,.pptx,.ipynb"
-                style={{ display: 'none' }}
-                onChange={(e) => handleFileUpload(e.target.files)}
-              />
-              <UploadIcon sx={{ fontSize: 48, color: 'grey.400', mb: 1 }} />
-              <Typography variant="h6" gutterBottom>
-                Drop files here or click to upload
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Supports PDF, TXT, PPTX, and IPYNB files (max 20MB each)
-              </Typography>
-            </Box>
+            {activeTab === 1 && (
+              <div className="space-y-4">
+                <div
+                  onDrop={handleDrop}
+                  onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                  onDragLeave={() => setDragActive(false)}
+                  className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                    dragActive ? 'border-primary bg-primary/10' : 'border-border'
+                  }`}
+                >
+                  <Upload className={`h-8 w-8 mx-auto mb-2 ${dragActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                  <p className="text-sm font-medium mb-1">
+                    Drop files here or click to browse
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    PDF, TXT, PPTX, IPYNB files supported
+                  </p>
+                  <input
+                    type="file"
+                    multiple
+                    accept=".pdf,.txt,.pptx,.ipynb"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                    id="file-upload"
+                  />
+                  <label
+                    htmlFor="file-upload"
+                    className="inline-block mt-2 px-4 py-2 bg-primary text-primary-foreground rounded-md text-xs cursor-pointer hover:bg-primary/90"
+                  >
+                    Browse Files
+                  </label>
+                </div>
 
-            {/* Uploaded Files List */}
-            {uploadedFiles.length > 0 && (
-              <Box sx={{ maxHeight: 200, overflow: 'auto' }}>
-                {uploadedFiles.map((file) => (
-                  <Card key={file.id} variant="outlined" sx={{ mb: 1 }}>
-                    <CardContent sx={{ py: 1.5 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <DocumentIcon color="action" />
-                        <Typography variant="body2" sx={{ flex: 1 }} noWrap>
-                          {file.file.name}
-                        </Typography>
-                        {getStatusIcon(file.processingStatus)}
-                      </Box>
-                      {file.status === 'uploading' && (
-                        <LinearProgress sx={{ mt: 1 }} />
-                      )}
-                      {file.status === 'processing' && (
-                        <Typography variant="caption" color="primary">
-                          Processing document...
-                        </Typography>
-                      )}
-                      {file.status === 'ready' && (
-                        <Typography variant="caption" color="success.main">
-                          Ready for use in chat sessions
-                        </Typography>
-                      )}
-                      {file.status === 'error' && (
-                        <Typography variant="caption" color="error">
-                          {file.error}
-                        </Typography>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
-              </Box>
+                {uploadFiles.length > 0 && (
+                  <div className="space-y-2">
+                    {uploadFiles.map((file, index) => (
+                      <div key={index} className="flex items-center justify-between p-2 border rounded">
+                        <span className="text-sm truncate">{file.name}</span>
+                        <div className="flex items-center space-x-2">
+                          {uploadProgress[file.name] === 100 && (
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                          )}
+                          {uploadProgress[file.name] === -1 && (
+                            <AlertCircle className="h-4 w-4 text-red-500" />
+                          )}
+                          <button
+                            onClick={() => setUploadFiles(prev => prev.filter((_, i) => i !== index))}
+                            className="text-red-500 hover:text-red-700"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    <button
+                      onClick={handleUploadAndAdd}
+                      disabled={loading}
+                      className="w-full py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 text-sm"
+                    >
+                      {loading ? 'Uploading...' : `Upload ${uploadFiles.length} file(s)`}
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
-          </Box>
-        )}
+          </div>
 
-        {selectedDocuments.length > 0 && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="body2" gutterBottom>
-              Selected documents: {selectedDocuments.length}
-            </Typography>
-          </Box>
-        )}
-      </DialogContent>
+          {error && (
+            <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md">
+              <p className="text-sm text-destructive">{error}</p>
+            </div>
+          )}
 
-      <DialogActions>
-        <Button onClick={handleClose}>Cancel</Button>
-        <Button 
-          onClick={handleCreateSession} 
-          variant="contained"
-          disabled={loading || !canCreateSession}
-        >
-          Create Session
-        </Button>
-      </DialogActions>
-    </Dialog>
+          <div className="text-xs text-muted-foreground">
+            Selected: {selectedDocuments.length} document(s)
+            {sessionType === 'voice' && selectedDocuments.length > 0 && (
+              <span className="block mt-1">Documents will be uploaded to ElevenLabs for voice interaction</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end p-6 border-t bg-muted/30">
+          <button
+            onClick={handleClose}
+            className="px-4 py-2 rounded-md hover:bg-secondary mr-3"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleCreateSession}
+            disabled={loading || !sessionTitle.trim() || (sessionType === 'voice' && selectedDocuments.length === 0)}
+            className="px-6 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-all
+              disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            {loading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : sessionType === 'voice' ? (
+              'Create Voice Session'
+            ) : (
+              'Create Text Session'
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Bot, Cpu, User, MessagesSquare } from 'lucide-react';
+import { Send, Loader2, Bot, Cpu, User, MessagesSquare, Mic, MessageSquare } from 'lucide-react';
 import { queryDocuments, switchModel, saveChatMessage, getChatMessages } from '../api';
+import VoiceChatInterface from './VoiceChatInterface';
 
-export default function ChatInterface({ sessionUuid }) {
+export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoice, onEndVoiceSession }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -10,6 +11,7 @@ export default function ChatInterface({ sessionUuid }) {
   const chatContainerRef = useRef(null);
   const [selectedModel, setSelectedModel] = useState('gemini');
   const [switchingModel, setSwitchingModel] = useState(false);
+  const [viewMode, setViewMode] = useState('text');
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -19,24 +21,28 @@ export default function ChatInterface({ sessionUuid }) {
     scrollToBottom();
   }, [messages]);
 
-  // Load existing messages when component mounts or sessionUuid changes
+  useEffect(() => {
+    if (sessionData?.session_type === 'voice') {
+      setViewMode('voice');
+    } else {
+      setViewMode('text');
+    }
+  }, [sessionData]);
+
   useEffect(() => {
     const loadMessages = async () => {
-      if (!sessionUuid) return;
+      if (!sessionUuid || viewMode === 'voice') return;
 
       try {
         const existingMessages = await getChatMessages(sessionUuid);
 
-        // Convert database messages to frontend format
         const formattedMessages = [];
         for (const msg of existingMessages) {
-          // Add user message
           formattedMessages.push({
             type: 'user',
             content: msg.message_content
           });
 
-          // Add assistant response if it exists
           if (msg.response_content) {
             formattedMessages.push({
               type: 'assistant',
@@ -53,7 +59,7 @@ export default function ChatInterface({ sessionUuid }) {
     };
 
     loadMessages();
-  }, [sessionUuid]);
+  }, [sessionUuid, viewMode]);
 
   const handleModelSwitch = async (provider) => {
     if (provider === selectedModel || isLoading || switchingModel) return;
@@ -77,21 +83,17 @@ export default function ChatInterface({ sessionUuid }) {
     setInput('');
     setIsLoading(true);
 
-    // Add user message
     setMessages(prev => [...prev, { type: 'user', content: question }]);
 
     const startTime = Date.now();
-    let messageSaved = false; // Track if we've already saved this message
+    let messageSaved = false;
 
     try {
-      // Initialize assistant message
       let assistantMessage = '';
       setMessages(prev => [...prev, { type: 'assistant', content: '', loading: true }]);
 
-      // Get streaming response
       const response = await queryDocuments(question, 3, selectedModel, sessionUuid);
 
-      // Set up text decoder
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
@@ -99,11 +101,9 @@ export default function ChatInterface({ sessionUuid }) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        // Decode the stream chunk
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n');
 
-        // Process each line
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             try {
@@ -126,27 +126,21 @@ export default function ChatInterface({ sessionUuid }) {
                   }
                 ]);
               } else if (data.type === 'done') {
-                // Save the complete conversation to database
-                console.log('Stream completed, saving message to database...');
                 if (sessionUuid && assistantMessage.trim() && !messageSaved) {
                   const processingTime = Date.now() - startTime;
-                  console.log(`Saving message: "${question}" -> "${assistantMessage.trim().substring(0, 100)}..."`);
                   try {
-                    const savedMessage = await saveChatMessage(
+                    await saveChatMessage(
                       sessionUuid,
                       question,
                       assistantMessage.trim(),
                       selectedModel,
-                      null, // token_count - we don't track this yet
+                      null,
                       processingTime
                     );
-                    console.log('Message saved successfully:', savedMessage);
                     messageSaved = true;
                   } catch (saveError) {
-                    console.error('Error saving message to database:', saveError);
+                    console.error('Error saving message:', saveError);
                   }
-                } else {
-                  console.log('Not saving message - missing sessionUuid, empty assistant message, or already saved');
                 }
                 break;
               }
@@ -157,13 +151,10 @@ export default function ChatInterface({ sessionUuid }) {
         }
       }
 
-      // Fallback: Save message even if stream didn't complete properly
       if (sessionUuid && assistantMessage.trim() && !messageSaved) {
         const processingTime = Date.now() - startTime;
-        console.log('Stream ended, attempting fallback save...');
-        console.log(`Fallback save data: sessionUuid=${sessionUuid}, question="${question}", assistantMessage="${assistantMessage.trim().substring(0, 100)}..."`);
         try {
-          const savedMessage = await saveChatMessage(
+          await saveChatMessage(
             sessionUuid,
             question,
             assistantMessage.trim(),
@@ -171,19 +162,9 @@ export default function ChatInterface({ sessionUuid }) {
             null,
             processingTime
           );
-          console.log('Fallback save successful:', savedMessage);
-          messageSaved = true;
         } catch (saveError) {
           console.error('Error in fallback save:', saveError);
         }
-      } else {
-        console.log('Skipping fallback save:', {
-          hasSessionUuid: !!sessionUuid,
-          hasAssistantMessage: !!assistantMessage.trim(),
-          alreadySaved: messageSaved,
-          sessionUuid,
-          assistantMessageLength: assistantMessage.length
-        });
       }
 
     } catch (error) {
@@ -194,6 +175,14 @@ export default function ChatInterface({ sessionUuid }) {
       ]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleVoiceModeToggle = () => {
+    if (sessionData?.session_type === 'voice') {
+      setViewMode(viewMode === 'voice' ? 'text' : 'voice');
+    } else {
+      onSwitchToVoice?.();
     }
   };
 
@@ -234,7 +223,6 @@ export default function ChatInterface({ sessionUuid }) {
     );
   };
 
-  // Show placeholder when no session is selected
   if (!sessionUuid) {
     return (
       <div className="flex h-full items-center justify-center rounded-lg border bg-card">
@@ -249,39 +237,74 @@ export default function ChatInterface({ sessionUuid }) {
     );
   }
 
+  if (viewMode === 'voice' && sessionData?.session_type === 'voice') {
+    return <VoiceChatInterface sessionUuid={sessionUuid} onEndSession={onEndVoiceSession} />;
+  }
+
   return (
     <div className="flex h-full flex-col rounded-lg border bg-card">
-      {/* Model Selector */}
       <div className="border-b px-4 py-2">
-        <div className="flex items-center justify-end space-x-2">
-          <button
-            onClick={() => handleModelSwitch('ollama')}
-            disabled={switchingModel}
-            className={`inline-flex items-center space-x-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              selectedModel === 'ollama'
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-accent'
-            }`}
-          >
-            <Cpu className="h-4 w-4" />
-            <span>Ollama</span>
-          </button>
-          <button
-            onClick={() => handleModelSwitch('gemini')}
-            disabled={switchingModel}
-            className={`inline-flex items-center space-x-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              selectedModel === 'gemini'
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-accent'
-            }`}
-          >
-            <Bot className="h-4 w-4" />
-            <span>Gemini</span>
-          </button>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="text-sm font-medium">
+              {sessionData?.session_type === 'voice' ? 'Voice Session' : 'Text Session'}
+            </span>
+            {sessionData?.session_type === 'voice' && (
+              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800">
+                <Mic className="h-3 w-3 mr-1" />
+                Voice Enabled
+              </span>
+            )}
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => handleModelSwitch('ollama')}
+              disabled={switchingModel || viewMode === 'voice'}
+              className={`inline-flex items-center space-x-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                selectedModel === 'ollama'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent'
+              } disabled:opacity-50`}
+            >
+              <Cpu className="h-4 w-4" />
+              <span>Ollama</span>
+            </button>
+            
+            <button
+              onClick={() => handleModelSwitch('gemini')}
+              disabled={switchingModel || viewMode === 'voice'}
+              className={`inline-flex items-center space-x-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                selectedModel === 'gemini'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent'
+              } disabled:opacity-50`}
+            >
+              <Bot className="h-4 w-4" />
+              <span>Gemini</span>
+            </button>
+
+            {sessionData?.session_type === 'voice' && (
+              <button
+                onClick={handleVoiceModeToggle}
+                className={`inline-flex items-center space-x-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  viewMode === 'voice'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                }`}
+                title={viewMode === 'voice' ? 'Switch to Text Mode' : 'Switch to Voice Mode'}
+              >
+                {viewMode === 'voice' ? (
+                  <MessageSquare className="h-4 w-4" />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Chat Messages */}
       <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => (
           <div key={index} className="animate-fade-in">
@@ -291,7 +314,6 @@ export default function ChatInterface({ sessionUuid }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Form */}
       <form onSubmit={handleSubmit} className="border-t bg-card p-4">
         <div className="flex space-x-2">
           <input
@@ -313,6 +335,17 @@ export default function ChatInterface({ sessionUuid }) {
               <Send className="h-4 w-4" />
             )}
           </button>
+          
+          {sessionData?.session_type !== 'voice' && (
+            <button
+              type="button"
+              onClick={handleVoiceModeToggle}
+              className="inline-flex items-center justify-center rounded-md bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/90 transition-colors"
+              title="Create Voice Session"
+            >
+              <Mic className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </form>
     </div>

@@ -215,6 +215,27 @@ class EnhancedVectorStoreService:
             logger.error(f"Error performing similarity search: {str(e)}")
             raise
             
+    async def delete_document(self, uuid_filename: str) -> bool:
+        """Delete all vectors associated with a document"""
+        try:
+            if self._vector_store is None:
+                self._initialize_vector_store()
+            
+            # Use a filter to specify which documents to delete
+            self._vector_store._collection.delete(
+                where={"uuid_filename": uuid_filename}
+            )
+            
+            # Persist changes
+            if hasattr(self._vector_store, "_persist"):
+                self._vector_store._persist()
+                
+            logger.info(f"Deleted vectors for document: {uuid_filename}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting vectors for document {uuid_filename}: {str(e)}")
+            return False
+
     async def delete_by_metadata(self, filter_dict: Dict[str, Any]) -> bool:
         """Delete documents matching the filter criteria"""
         try:

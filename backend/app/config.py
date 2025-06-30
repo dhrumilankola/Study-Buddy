@@ -1,52 +1,63 @@
-from pydantic_settings import BaseSettings
 import os
-from typing import List, Optional
 import logging
-from pydantic import validator
+from typing import List, Optional
+
+from pydantic import validator, Extra, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    # API settings
+    # ─── Pydantic-Settings configuration ─────────────────────────────────────
+    model_config = SettingsConfigDict(
+        extra=Extra.ignore,              # skip any undeclared .env entries
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
+
+    # ─── API & CORS ───────────────────────────────────────────────────────────
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Study Buddy API"
-    
-    # CORS settings
     BACKEND_CORS_ORIGINS: List[str] = ["*"]
-    
-    # Logging configuration
+
+    # ─── Logging ──────────────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
-    
-    # File upload settings
-    UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "uploads")
-    VECTOR_STORE_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "vector_store")
-    MAX_FILE_SIZE: int = 20 * 1024 * 1024  # 20MB
+
+    # ─── File upload ─────────────────────────────────────────────────────────
+    UPLOAD_DIR: str = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "data", "uploads"
+    )
+    VECTOR_STORE_PATH: str = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "data", "vector_store"
+    )
+    MAX_FILE_SIZE: int = 20 * 1024 * 1024
     ALLOWED_EXTENSIONS: List[str] = ['.pdf', '.txt', '.pptx', '.ipynb']
-    
-    # Model settings
+
+    # ─── Model & Embeddings ─────────────────────────────────────────────────
     OLLAMA_MODEL: str
     DEFAULT_MODEL_PROVIDER: str
-    
-    # Embeddings settings
     EMBEDDINGS_MODEL_TYPE: str = "sentence_transformer"
     EMBEDDINGS_MODEL: str = "all-mpnet-base-v2"
     EMBEDDINGS_DEVICE: str = "cpu"
-    
-    # Ollama settings
+
+    # ─── Ollama tuning ────────────────────────────────────────────────────────
     OLLAMA_BASE_URL: str
     MODEL_TEMPERATURE: float
     MODEL_TOP_P: float
     MODEL_TOP_K: int
     MODEL_MAX_TOKENS: int
-    
-    # Vector store settings
+
+    # ─── Vector store ────────────────────────────────────────────────────────
     VECTOR_STORE_COLLECTION_NAME: str = "study_buddy_docs"
     VECTOR_STORE_BATCH_SIZE: int = 10
-    
-    # Google AI settings (for Gemini)
+
+    # ─── Gemini settings ─────────────────────────────────────────────────────
     GOOGLE_API_KEY: Optional[str] = None
     GOOGLE_PROJECT_ID: Optional[str] = None
     GEMINI_MODEL: str
 
-    # Database settings
+    # ─── Database ────────────────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://study_buddy:study_buddy_password@localhost:5432/study_buddy_db"
     DATABASE_HOST: str = "localhost"
     DATABASE_PORT: int = 5432
@@ -56,71 +67,81 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
 
-    # Document processing settings
+    # ─── Processing & RAG ────────────────────────────────────────────────────
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
-    
-    # RAG settings
     DEFAULT_CONTEXT_WINDOW: int = 1
     MAX_CONTEXT_WINDOW: int = 2
-    
-    # Performance settings
-    REQUEST_TIMEOUT: int = 60  # seconds
+    REQUEST_TIMEOUT: int = 60
 
-    @validator("DEFAULT_MODEL_PROVIDER")
+    # ─── ElevenLabs Conversational AI ────────────────────────────────────────
+    ELEVENLABS_API_KEY: Optional[str] = None
+    AGENT_ID: Optional[str] = None
+
+    # ─── Validators ──────────────────────────────────────────────────────────
+    @field_validator("DEFAULT_MODEL_PROVIDER")
+    @classmethod
     def validate_model_provider(cls, v):
         if v not in ["ollama", "gemini"]:
-            raise ValueError("DEFAULT_MODEL_PROVIDER must be either 'ollama' or 'gemini'")
+            raise ValueError("DEFAULT_MODEL_PROVIDER must be 'ollama' or 'gemini'")
         return v
 
-    @validator("GOOGLE_API_KEY")
-    def validate_api_key(cls, v, values):
-        if values.get("DEFAULT_MODEL_PROVIDER") == "gemini" and not v:
+    @field_validator("GOOGLE_API_KEY")
+    @classmethod
+    def validate_api_key(cls, v, info):
+        if info.data.get("DEFAULT_MODEL_PROVIDER") == "gemini" and not v:
             raise ValueError("GOOGLE_API_KEY is required when using Gemini provider")
         return v
 
-    @validator("MODEL_TEMPERATURE")
+    @field_validator("ELEVENLABS_API_KEY", "AGENT_ID")
+    @classmethod
+    def validate_elevenlabs_settings(cls, v, info):
+        if info.field_name == "ELEVENLABS_API_KEY" and v and not v.startswith("sk_"):
+            raise ValueError("ELEVENLABS_API_KEY should start with 'sk_'")
+        if info.field_name == "AGENT_ID" and v and not v.startswith("agent_"):
+            raise ValueError("AGENT_ID should start with 'agent_'")
+        return v
+
+    @field_validator("MODEL_TEMPERATURE")
+    @classmethod
     def validate_temperature(cls, v):
-        if not 0 <= v <= 1:
-            raise ValueError("MODEL_TEMPERATURE must be between 0 and 1")
+        if not 0.0 <= v <= 2.0:
+            raise ValueError("MODEL_TEMPERATURE must be between 0.0 and 2.0")
         return v
 
-    @validator("MODEL_TOP_P")
+    @field_validator("MODEL_TOP_P")
+    @classmethod
     def validate_top_p(cls, v):
-        if not 0 <= v <= 1:
-            raise ValueError("MODEL_TOP_P must be between 0 and 1")
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("MODEL_TOP_P must be between 0.0 and 1.0")
         return v
 
-    @validator("MODEL_TOP_K")
+    @field_validator("MODEL_TOP_K")
+    @classmethod
     def validate_top_k(cls, v):
-        if not 1 <= v <= 100:
-            raise ValueError("MODEL_TOP_K must be between 1 and 100")
+        if v < 1:
+            raise ValueError("MODEL_TOP_K must be at least 1")
         return v
-    
-    class Config:
-        case_sensitive = True
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
-try:
-    # Create instance
-    settings = Settings()
+    @field_validator("MAX_FILE_SIZE")
+    @classmethod
+    def validate_file_size(cls, v):
+        if v < 1024:
+            raise ValueError("MAX_FILE_SIZE must be at least 1KB")
+        return v
 
-    # Configure logging
-    logging.basicConfig(
-        level=getattr(logging, settings.LOG_LEVEL),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    )
+# ─── Instantiate & configure logging ─────────────────────────────────────────
+settings = Settings()
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logging.info("Configuration loaded successfully")
+logging.info(f"Using model provider: {settings.DEFAULT_MODEL_PROVIDER}")
+logging.info(
+    f"Model: {settings.GEMINI_MODEL if settings.DEFAULT_MODEL_PROVIDER == 'gemini' else settings.OLLAMA_MODEL}"
+)
 
-    # Log successful configuration
-    logging.info(f"Configuration loaded successfully")
-    logging.info(f"Using model provider: {settings.DEFAULT_MODEL_PROVIDER}")
-    logging.info(f"Model: {settings.GEMINI_MODEL if settings.DEFAULT_MODEL_PROVIDER == 'gemini' else settings.OLLAMA_MODEL}")
-
-    # Ensure required directories exist
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
-
-except Exception as e:
-    logging.error(f"Error loading configuration: {str(e)}")
-    raise
+# Ensure directories exist
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
