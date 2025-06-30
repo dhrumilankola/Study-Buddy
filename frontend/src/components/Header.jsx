@@ -24,11 +24,7 @@ export default function Header({ onNavigate, onUploadClick }) {
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-14 items-center">
-        <div className="mr-4 hidden md:flex">
-          <span className="text-xl font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
-            Study Buddy
-          </span>
-        </div>
+        {/* Branding removed to avoid duplication with top AppBar */}
         
         {/* Mobile menu button */}
         <button
@@ -41,7 +37,6 @@ export default function Header({ onNavigate, onUploadClick }) {
         {/* Desktop navigation */}
         <div className="hidden md:flex flex-1 items-center justify-between space-x-2">
           <nav className="flex items-center space-x-2">
-            <NavButton icon={FileQuestion} label="Chat" onClick={() => onNavigate('chat')} />
             <NavButton icon={BookOpen} label="Documents" onClick={() => onNavigate('documents')} />
             <NavButton icon={UploadCloud} label="Upload" onClick={onUploadClick} highlight />
           </nav>
@@ -51,7 +46,6 @@ export default function Header({ onNavigate, onUploadClick }) {
         {mobileMenuOpen && (
           <div className="absolute top-14 left-0 right-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 md:hidden">
             <nav className="flex flex-col space-y-2">
-              <NavButton icon={FileQuestion} label="Chat" onClick={() => onNavigate('chat')} />
               <NavButton icon={BookOpen} label="Documents" onClick={() => onNavigate('documents')} />
               <NavButton icon={UploadCloud} label="Upload" onClick={onUploadClick} highlight />
             </nav>

@@ -87,7 +87,7 @@ export const queryDocuments = async (question, contextWindow = 3, modelProvider 
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          question: question,
+          query: question,
           context_window: contextWindow,
           model_provider: modelProvider
         })

@@ -36,7 +36,8 @@ const ChatSessionManager = ({
   currentSessionId,
   onNewSession,
   onManageDocuments,
-  apiBaseUrl = 'http://localhost:8000/api/v1'
+  apiBaseUrl = 'http://localhost:8000/api/v1',
+  showHeader = true,
 }) => {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -103,34 +104,36 @@ const ChatSessionManager = ({
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
-      <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="h6" gutterBottom>
-          Chat Sessions
-        </Typography>
-        <Stack spacing={1}>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => setNewSessionDialog(true)}
-            fullWidth
-            disabled={loading}
-          >
-            New Chat
-          </Button>
-          {currentSessionId && onManageDocuments && (
+      {showHeader && (
+        /* Header */
+        <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <Typography variant="h6" gutterBottom>
+            Chat Sessions
+          </Typography>
+          <Stack spacing={1}>
             <Button
-              variant="outlined"
-              startIcon={<DocumentIcon />}
-              onClick={() => onManageDocuments(currentSessionId)}
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => setNewSessionDialog(true)}
               fullWidth
-              size="small"
+              disabled={loading}
             >
-              Manage Documents
+              New Chat
             </Button>
-          )}
-        </Stack>
-      </Box>
+            {currentSessionId && onManageDocuments && (
+              <Button
+                variant="outlined"
+                startIcon={<DocumentIcon />}
+                onClick={() => onManageDocuments(currentSessionId)}
+                fullWidth
+                size="small"
+              >
+                Manage Documents
+              </Button>
+            )}
+          </Stack>
+        </Box>
+      )}
 
       {/* Error Alert */}
       {error && (

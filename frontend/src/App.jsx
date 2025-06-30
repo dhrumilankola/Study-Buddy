@@ -1,26 +1,24 @@
 import { useState, useEffect } from 'react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
-import { CssBaseline, Box, Drawer, AppBar, Toolbar, Typography, IconButton } from '@mui/material';
-import { Menu as MenuIcon } from '@mui/icons-material';
-import Layout from './components/Layout';
+import { CssBaseline, Box, Drawer, AppBar, Toolbar, Typography } from '@mui/material';
+import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
-import DocumentList from './components/DocumentList';
 import DocumentManager from './components/DocumentManager';
 import FileUpload from './components/FileUpload';
 import StatusIndicator from './components/StatusIndicator';
-import ChatSessionManager from './components/ChatSessionManager';
 import SessionDocuments from './components/SessionDocuments';
 import SessionDocumentManager from './components/SessionDocumentManager';
 import { getChatSession, endVoiceChat } from './api';
+import ThemeToggle from './components/ThemeToggle';
 
 const theme = createTheme({
   palette: {
     mode: 'light',
     primary: {
-      main: '#1976d2',
+      main: '#00c08b', // ChatGPT teal
     },
     secondary: {
-      main: '#dc004e',
+      main: '#2d8cff', // Gemini blue
     },
   },
 });
@@ -37,6 +35,7 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [showDocumentManager, setShowDocumentManager] = useState(false);
   const [sessionDocuments, setSessionDocuments] = useState([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const handleNavigation = (view) => {
     if (view === currentView && !showUpload) return;
@@ -151,7 +150,6 @@ export default function App() {
       case 'chat':
         return (
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <StatusIndicator />
             <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               <ChatInterface 
                 sessionUuid={currentSessionId}
@@ -165,7 +163,6 @@ export default function App() {
       case 'documents':
         return (
           <Box sx={{ p: 3 }}>
-            <StatusIndicator />
             <DocumentManager showUploadTab={true} />
           </Box>
         );
@@ -188,22 +185,16 @@ export default function App() {
           position="fixed"
           sx={{
             zIndex: (theme) => theme.zIndex.drawer + 1,
-            ml: sidebarOpen ? `${DRAWER_WIDTH}px` : 0,
-            width: sidebarOpen ? `calc(100% - ${DRAWER_WIDTH}px)` : '100%',
-            transition: 'margin 0.3s, width 0.3s'
+            ml: sidebarOpen ? `${sidebarCollapsed ? 60 : DRAWER_WIDTH}px` : 0,
+            width: sidebarOpen ? `calc(100% - ${sidebarCollapsed ? 60 : DRAWER_WIDTH}px)` : '100%',
+            transition: 'margin 0.3s, width 0.3s',
+            backgroundColor: 'hsl(var(--background))',
+            color: 'hsl(var(--foreground))',
+            borderBottom: '1px solid hsl(var(--border))',
           }}
         >
-          <Toolbar>
-            <IconButton
-              color="inherit"
-              aria-label="toggle sidebar"
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              edge="start"
-              sx={{ mr: 2 }}
-            >
-              <MenuIcon />
-            </IconButton>
-            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
+          <Toolbar disableGutters>
+            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, pl: 2 }}>
               Study Buddy
               {currentSessionData && (
                 <Typography variant="caption" sx={{ ml: 2, opacity: 0.8 }}>
@@ -211,6 +202,9 @@ export default function App() {
                 </Typography>
               )}
             </Typography>
+
+            {/* Theme toggle button */}
+            <ThemeToggle />
           </Toolbar>
         </AppBar>
 
@@ -219,30 +213,31 @@ export default function App() {
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           sx={{
-            width: DRAWER_WIDTH,
+            width: sidebarCollapsed ? 60 : DRAWER_WIDTH,
             flexShrink: 0,
             '& .MuiDrawer-paper': {
-              width: DRAWER_WIDTH,
+              width: sidebarCollapsed ? 60 : DRAWER_WIDTH,
               boxSizing: 'border-box',
+              backgroundColor: 'hsl(var(--background))',
+              color: 'hsl(var(--foreground))',
+              borderRight: '1px solid hsl(var(--border))',
+              '& .MuiTypography-root': {
+                color: 'inherit',
+              },
+              '& .MuiSvgIcon-root': {
+                color: 'inherit',
+              },
             },
           }}
         >
-          <Toolbar />
-          <Box sx={{ overflow: 'auto', height: '100%' }}>
-            <Layout
-              currentView={currentView}
-              onNavigate={handleNavigation}
-              onUpload={handleUploadClick}
-              showUpload={showUpload}
-              isTransitioning={isTransitioning}
-            />
-            <ChatSessionManager
-              onSessionSelect={handleSessionSelect}
-              onSessionCreated={handleNewSession}
-              currentSessionId={currentSessionId}
-              onManageDocuments={handleManageDocuments}
-            />
-          </Box>
+          <Sidebar
+            onSessionSelect={handleSessionSelect}
+            currentSessionId={currentSessionId}
+            onNewSession={handleNewSession}
+            onNavigateDocuments={() => handleNavigation('documents')}
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+          />
         </Drawer>
 
         <Box
@@ -267,6 +262,12 @@ export default function App() {
             }}
           >
             {renderMainContent()}
+
+            {/* {currentView === 'chat' && (
+              <Box sx={{ position: 'fixed', bottom: 24, right: 24 }}>
+                <StatusIndicator />
+              </Box>
+            )} */}
           </Box>
         </Box>
 

@@ -441,8 +441,9 @@ class EnhancedRAGService:
             logger.info(f"Starting generate_response with provider: {provider}")
 
             # Apply custom model parameters if provided
-            if query.llm_config:
-                logger.info(f"Custom LLM config applied: {query.llm_config}")
+            llm_conf = getattr(query, 'llm_config', None)
+            if llm_conf:
+                logger.info(f"Custom LLM config applied: {llm_conf}")
 
             # Check if we're approaching rate limits for Gemini
             if provider == "gemini":
@@ -482,7 +483,7 @@ class EnhancedRAGService:
             # Perform hybrid search with retry logic
             try:
                 search_results = await self._perform_hybrid_search(
-                    query.question,
+                    query.query,
                     k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW,
                     session_document_filter=session_document_filter
                 )
@@ -497,7 +498,7 @@ class EnhancedRAGService:
                     # Wait and retry once
                     await asyncio.sleep(5)
                     search_results = await self._perform_hybrid_search(
-                        query.question,
+                        query.query,
                         k=query.context_window or settings.DEFAULT_CONTEXT_WINDOW,
                         session_document_filter=session_document_filter
                     )
@@ -505,7 +506,7 @@ class EnhancedRAGService:
                     raise
             
             # Apply re-ranking
-            search_results = self._re_rank_results(search_results, query.question)
+            search_results = self._re_rank_results(search_results, query.query)
             
             logger.info(f"Found {len(search_results)} relevant documents")
             
@@ -589,14 +590,14 @@ class EnhancedRAGService:
                     | StrOutputParser()
                 )
 
-                logger.debug(f"Query being sent to model: {query.question}")
+                logger.debug(f"Query being sent to model: {query.query}")
 
                 # Stream the results with sentence-level chunking
                 current_sentence = ""
                 buffer = ""
                 
                 try:
-                    async for chunk in chain.astream(query.question):
+                    async for chunk in chain.astream(query.query):
                         buffer += chunk
 
                         # Process complete sentences
@@ -656,6 +657,33 @@ class EnhancedRAGService:
                 "type": "error",
                 "content": f"Error in RAG pipeline: {str(e)}"
             })
+
+    # ------------------------------------------------------------------
+    # Public adapter for API route (back-compatibility)
+    # ------------------------------------------------------------------
+    async def query_documents_streaming(
+        self,
+        question: str,
+        context_window: int = 3,
+        model_provider: Optional[str] = None,
+        session_uuid: Optional[str] = None,
+        db: Optional[Any] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Wrapper used by the /query/ endpoint to maintain legacy signature."""
+        # Allow overriding provider
+        if model_provider:
+            self.current_provider = model_provider
+
+        req = QueryRequest(
+            query=question,
+            context_window=context_window,
+            model_provider=self.current_provider,
+            session_uuid=session_uuid,
+        )
+
+        # Just forward to the main generator
+        async for chunk in self.generate_response(req, session_uuid):
+            yield chunk
 
 
 
