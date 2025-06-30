@@ -24,12 +24,13 @@ _A full-stack AI study assistant with document-aware chat, voice conversation, a
 
 ## 📸 Live Demo
 
-1. **Voice Mode** – Ask follow-up questions hands-free
+1. **Chat/Voice Mode** – Ask follow-up questions hands-free
    
-   ![Voice Chat GIF](docs/voice_chat.png)
+   ![Chat](docs/chat_interface.png)
+   ![Voice Chat](docs/voice_chat.png)
 2. **Document Manager** – Upload & monitor indexing status
    
-   ![Uploads Screenshot](docs/chat_interface.png)
+   ![Uploads Screenshot](docs/manage_documents.png)
 
 ---
 
