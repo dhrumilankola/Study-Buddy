@@ -127,7 +127,7 @@ export default function DocumentManager({ onDocumentSelect, selectedDocuments = 
   const statusCounts = getStatusCounts();
 
   return (
-    <div className="w-full max-w-6xl mx-auto space-y-6">
+    <div className="flex h-full w-full p-10 flex-col border bg-card font-sans text-input">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">Document Management</h2>

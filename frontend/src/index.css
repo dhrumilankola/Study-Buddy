@@ -4,7 +4,9 @@
 @tailwind components;
 @tailwind utilities;
  
-/* Base helpers */
+/* Base helpers
+*/
+
 @layer base {
   * {
     @apply border-border;
@@ -13,6 +15,7 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
 
 /* Custom scrollbar styles */
 ::-webkit-scrollbar {

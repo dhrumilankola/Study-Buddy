@@ -23,6 +23,7 @@ import {
 import {
   Add as AddIcon,
   Chat as ChatIcon,
+  Forum as ForumIcon,
   Delete as DeleteIcon,
   Edit as EditIcon,
   Description as DocumentIcon,
@@ -107,7 +108,7 @@ const ChatSessionManager = ({
       {showHeader && (
         /* Header */
         <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-          <Typography variant="h6" gutterBottom>
+          <Typography variant="h6" gutterBottom sx={{fontFamily: 'var(--font-sans)', fontWeight: 'var(--font-strong)'}}>
             Chat Sessions
           </Typography>
           <Stack spacing={1}>
@@ -117,6 +118,9 @@ const ChatSessionManager = ({
               onClick={() => setNewSessionDialog(true)}
               fullWidth
               disabled={loading}
+              sx={{
+                fontFamily: 'var(--font-sans)',
+              }}
             >
               New Chat
             </Button>
@@ -149,11 +153,11 @@ const ChatSessionManager = ({
             <Typography color="text.secondary">Loading sessions...</Typography>
           </Box>
         ) : sessions.length === 0 ? (
-          <Box sx={{ p: 2, textAlign: 'center' }}>
-            <Typography color="text.secondary" gutterBottom>
+          <Box sx={{ p: 2, textAlign: 'center'}}>
+            <Typography sx={{fontFamily: 'var(--font-sans)'}} gutterBottom>
               No chat sessions yet
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{fontFamily: 'var(--font-sans)'}}>
               Create your first chat session to get started
             </Typography>
           </Box>
@@ -173,11 +177,12 @@ const ChatSessionManager = ({
                   }}
                 >
                   <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', mb: 1 }}>
-                    <ChatIcon sx={{ mr: 1, color: 'text.secondary' }} />
+                    <ForumIcon sx={{ mr: 1, color: 'text.secondary' }} />
                     <Typography 
                       variant="subtitle2" 
                       sx={{ 
                         flex: 1, 
+                        fontFamily: 'var(--font-sans)',
                         fontWeight: currentSessionId === session.session_uuid ? 'bold' : 'normal'
                       }}
                       noWrap
@@ -190,7 +195,7 @@ const ChatSessionManager = ({
                         e.stopPropagation();
                         deleteSession(session.session_uuid);
                       }}
-                      sx={{ ml: 1 }}
+                      sx={{ ml: 1, color: 'var(--input)' }}
                     >
                       <DeleteIcon fontSize="small" />
                     </IconButton>
@@ -198,10 +203,10 @@ const ChatSessionManager = ({
                   
                   <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', gap: 1 }}>
                     <TimeIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography variant="caption" color="text.secondary" sx={{fontFamily: 'var(--font-sans)'}}>
                       {formatDistanceToNow(new Date(session.last_activity), { addSuffix: true })}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography variant="caption" color="text.secondary" sx={{fontFamily: 'var(--font-sans)'}}>
                       • {session.total_messages} messages
                     </Typography>
                   </Box>

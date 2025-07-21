@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 import logging
+from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 import uuid
-
 from app.database.connection import get_db_session
 from app.database.services import DocumentService, ChatService
-from app.database.models import ProcessingStatus, ModelProvider
+from app.database.models import ProcessingStatus, ModelProvider, ChatSession
 from app.models.schemas import (
     CreateChatSessionRequest,
     UpdateChatSessionRequest,
@@ -18,7 +19,7 @@ from app.models.schemas import (
     ChatSessionWithDocumentsResponse,
     DocumentResponse,
     QueryRequest,
-    ChatMessageResponse
+    ChatMessageResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,19 +222,54 @@ async def delete_chat_session(
     session_uuid: str,
     db: AsyncSession = Depends(get_db_session)
 ):
-    """Delete a chat session and all its messages"""
+    """Delete a chat session and all its related data"""
     try:
-        success = await ChatService.delete_session(db, session_uuid)
-        if not success:
+        # Get the session with relationships loaded
+        result = await db.execute(
+            select(ChatSession)
+            .options(selectinload(ChatSession.messages))
+            .where(ChatSession.session_uuid == session_uuid)
+        )
+        session = result.scalar_one_or_none()
+        
+        if not session:
             raise HTTPException(status_code=404, detail="Chat session not found")
         
-        return {"message": "Chat session deleted successfully"}
+        # Delete the session - cascades will handle related records
+        await db.delete(session)
+        await db.commit()
+        
+        return {"message": f"Chat session {session_uuid} deleted successfully"}
         
     except HTTPException:
         raise
     except Exception as e:
+        await db.rollback()
         logger.error(f"Error deleting chat session {session_uuid}: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to delete chat session")
+    
+# Below API was not able to delete the Last Chat Session because of foreign key constraint.   
+    
+# /// async def delete_chat_session(
+#     session_uuid: str,
+#     db: AsyncSession = Depends(get_db_session)
+# ):
+#     """Delete a chat session and all its messages"""
+#     try:
+#         success = await ChatService.delete_session(db, session_uuid)
+#         if not success:
+#             raise HTTPException(status_code=404, detail="Chat session not found")
+        
+#         return {"message": "Chat session deleted successfully"}
+        
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Error deleting chat session {session_uuid}: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Failed to delete chat session")
+# ///
+
+
 
 @router.get("/sessions/{session_uuid}/documents", response_model=List[DocumentResponse])
 async def get_session_documents(

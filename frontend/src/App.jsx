@@ -162,7 +162,7 @@ export default function App() {
         );
       case 'documents':
         return (
-          <Box sx={{ p: 3 }}>
+          <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <DocumentManager showUploadTab={true} />
           </Box>
         );
@@ -194,10 +194,10 @@ export default function App() {
           }}
         >
           <Toolbar disableGutters>
-            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, pl: 2 }}>
+            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, pl: 2, color: 'var(--font-gradient-from)', fontFamily: 'var(--font-sans)', fontWeight: 'var(--font-strong)'}}>
               Study Buddy
               {currentSessionData && (
-                <Typography variant="caption" sx={{ ml: 2, opacity: 0.8 }}>
+                <Typography variant="caption" sx={{ ml: 2, opacity: 0.8, color: '#7c7c7d',fontFamily: 'var(--font-sans)', fontWeight: 'var(--font-medium)'}}>
                   {currentSessionData.session_type === 'voice' ? '🎙️ Voice' : '💬 Text'} Session
                 </Typography>
               )}
@@ -274,7 +274,7 @@ export default function App() {
         <SessionDocumentManager
           isOpen={showDocumentManager}
           onClose={() => setShowDocumentManager(false)}
-          sessionUuid={currentSessionId}
+          sessionUuid={currentSessionId}    
         />
       </Box>
     </ThemeProvider>

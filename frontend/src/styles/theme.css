@@ -1,7 +1,17 @@
 :root {
   /* Brand colours */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+
   --gradient-from: #00c08b; /* ChatGPT teal */
   --gradient-to: #2d8cff;   /* Gemini blue */
+
+  --font-gradient-from: #2d8cff; /* ChatGPT teal */
+  --font-gradient-to: #00c08b;   /* Gemini blue */
+
+  /* Fonts Weights */
+  --font-small: 300;
+  --font-medium: 500;
+  --font-strong: 700;
 
   /* Base palette – LIGHT MODE */
   --background: 0 0% 100%;          /* white */
@@ -30,16 +40,19 @@
   --destructive-foreground: 210 40% 98%;
 
   --border: 0 0% 90%;
-  --input: 0 0% 90%;
+  --input: 0 0% 0%;
   --ring: 164 90% 40%;
 
-  --radius: 0.75rem;
+  --radius: 0.50rem;
 }
 
 /* DARK MODE */
 [data-theme='dark'], .dark {
   --background: 0 0% 0%;            /* black */
   --foreground: 0 0% 96%;           /* near-white */
+
+  --font-gradient-from: #00c08b; /* ChatGPT teal */
+  --font-gradient-to: #2d8cff;   /* Gemini blue */
 
   --card: 0 0% 10%;
   --card-foreground: 0 0% 96%;
@@ -63,7 +76,7 @@
   --destructive-foreground: 210 40% 98%;
 
   --border: 0 0% 15%;
-  --input: 0 0% 15%;
+  --input: 0 0% 100%;
   --ring: 164 90% 40%;
 }
 

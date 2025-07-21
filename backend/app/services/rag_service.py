@@ -557,7 +557,7 @@ class EnhancedRAGService:
                 IMPORTANT INSTRUCTIONS:
                 1. Base your answer STRICTLY on the provided context. Do not use any other knowledge.
                 2. If the context doesn't contain relevant information, state clearly that you cannot find the answer in the provided documents.
-                3. Cite sources when appropriate by referring to the document names mentioned in the context.
+                3. Cite sources when appropriate by referring to the document name mentioned in the context.
                 4. Format your responses for clarity using markdown when helpful.
                 5. Be concise and focused in your responses.
                 6. When answering technical questions, be precise and accurate.

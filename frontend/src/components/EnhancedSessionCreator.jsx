@@ -129,7 +129,7 @@ export default function EnhancedSessionCreator({ open, onClose, onSessionCreated
   const readyDocuments = availableDocuments.filter(doc => doc.processing_status === 'indexed');
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 font-sans">
       <div className="bg-background rounded-lg shadow-lg w-full max-w-2xl max-h-[85vh] overflow-hidden">
         <div className="flex items-center justify-between p-6 border-b">
           <h2 className="text-xl font-semibold">Create New Chat Session</h2>

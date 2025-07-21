@@ -2,6 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Bot, Cpu, User, MessagesSquare, Mic, MessageSquare } from 'lucide-react';
 import { queryDocuments, switchModel, saveChatMessage, getChatMessages } from '../api';
 import VoiceChatInterface from './VoiceChatInterface';
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css'; 
+
 
 export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoice, onEndVoiceSession }) {
   const [messages, setMessages] = useState([]);
@@ -207,16 +212,23 @@ export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoic
               ? 'bg-primary text-primary-foreground'
               : isError
               ? 'bg-destructive/10 text-destructive'
-              : 'bg-muted'
+              : 'bg-muted text-input'
           }`}
         >
           {message.loading ? (
             <div className="flex items-center space-x-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Thinking...</span>
+              <Loader2 className="h-4 w-4 animate-spin text-input" />
+              <span className='text-input'>Thinking...</span>
             </div>
           ) : (
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            <p className="whitespace-pre-wrap">
+              <ReactMarkdown
+                remarkPlugins={[remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+              >
+                {message.content}
+              </ReactMarkdown>
+            </p>
           )}
         </div>
       </div>
@@ -225,7 +237,7 @@ export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoic
 
   if (!sessionUuid) {
     return (
-      <div className="flex h-full items-center justify-center rounded-lg border bg-card">
+      <div className="flex h-full items-center justify-center border bg-card font-sans">
         <div className="text-center">
           <MessagesSquare className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
           <h3 className="text-lg font-medium text-foreground mb-2">No Chat Session Selected</h3>
@@ -242,11 +254,11 @@ export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoic
   }
 
   return (
-    <div className="flex h-full flex-col rounded-lg border bg-card">
+    <div className="flex h-full flex-col border bg-card font-sans">
       <div className="border-b px-4 py-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <span className="text-sm font-medium">
+            <span className="text-sm font-bold text-input">
               {sessionData?.session_type === 'voice' ? 'Voice Session' : 'Text Session'}
             </span>
             {sessionData?.session_type === 'voice' && (
@@ -314,14 +326,14 @@ export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoic
         <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t bg-card p-4">
+      <form onSubmit={handleSubmit} className="border-t bg-card p-4 sticky bottom-0 z-10">
         <div className="flex space-x-2">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={`Ask a question using ${selectedModel === 'gemini' ? 'Google Gemini' : 'Ollama'}...`}
-            className="flex-1 min-w-0 rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex-1 min-w-0 rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring text-input"
             disabled={isLoading || switchingModel}
           />
           <button

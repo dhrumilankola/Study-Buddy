@@ -4,8 +4,6 @@ _A full-stack AI study assistant with document-aware chat, voice conversation, a
 
 ---
 
-![Study Buddy – Hero Demo](docs/hero.gif)
-
 > **"Ask questions about your notes, talk through complex topics, or quiz yourself – Study Buddy is your personal study partner."**
 
 ---
@@ -98,6 +96,10 @@ OLLAMA_MODEL=llama3:8b
 # ─── Embeddings & RAG ────────────────
 EMBEDDINGS_MODEL=all-mpnet-base-v2
 MODEL_TEMPERATURE=0.7
+MODEL_TOP_P=0.9
+MODEL_TOP_K=40
+MODEL_MAX_TOKENS=2048
+
 
 # ─── ElevenLabs Voice Chat ───────────
 ELEVENLABS_API_KEY=sk_your_elevenlabs_key
@@ -128,25 +130,17 @@ mkdir -p ../data/uploads ../data/vector_store
 # Initialise DB tables – copy the inline snippet below into a REPL **or** save it as `init_db.py` and run `python init_db.py`.
 ```
 
-Inline init script (copy–paste directly):
+Run Table Setup script:
 
-```python
-import asyncio
-from app.database.connection import engine
-from app.database.models import Base
-
-async def create():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    print("✅  Tables created")
-
-asyncio.run(create())
+```
+cd backend
+python setup.py
 ```
 
 Run the API server:
 
-```bash
-uvicorn main:app --reload --port 8000  # hot-reload during dev
+```
+python main.py  # hot-reload during dev
 ```
 
 ---
@@ -156,7 +150,7 @@ uvicorn main:app --reload --port 8000  # hot-reload during dev
 ```bash
 # In /frontend
 npm install                 # Install React + deps
-npm start                   # Dev server on http://localhost:3000
+npm run dev                   # Dev server on http://localhost:5173
 ```
 
 > The app uses **Vite + React 18** and Tailwind CSS. Hot-reload is enabled by default.
@@ -226,4 +220,4 @@ PRs and issues are welcome! Please:
 
 ## 📝 License
 
-MIT © 2024 Your Name or Organisation
+MIT © 2025 Dhrumil Ankola
