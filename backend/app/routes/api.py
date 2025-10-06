@@ -226,10 +226,13 @@ async def delete_document(document_id: int, db: AsyncSession = Depends(get_db_se
                 detail=f"Document with ID {document_id} not found"
             )
 
-        file_path = os.path.join(settings.UPLOAD_DIR, f"{document.uuid_filename}.{document.file_type}")
+        file_path = os.path.join(settings.UPLOAD_DIR, document.uuid_filename)
 
         if os.path.exists(file_path):
             os.remove(file_path)
+            logger.info(f"Removed file {file_path}")
+        else:
+            logger.warning(f"File not found: {file_path}")
 
         await rag_service.vector_store_service.delete_document(document.uuid_filename)
 
@@ -253,5 +256,4 @@ async def get_status():
     return {
         "status": "running",
         "model_provider": rag_service.current_provider,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+        "timestamp": datetime.utcnow().isoformat()    }
