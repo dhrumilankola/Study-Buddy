@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Bot, Cpu, User, MessagesSquare, Mic, MessageSquare } from 'lucide-react';
 import { queryDocuments, switchModel, saveChatMessage, getChatMessages } from '../api';
 import VoiceChatInterface from './VoiceChatInterface';
+import MarkdownRenderer from './MarkdownRenderer';
 
 export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoice, onEndVoiceSession }) {
   const [messages, setMessages] = useState([]);
@@ -190,33 +191,39 @@ export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoic
     const isUser = message.type === 'user';
     const isError = message.type === 'error';
 
-    return (
-      <div className={`flex items-start space-x-2 ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
-        <div className={`flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full ${
-          isUser ? 'bg-primary' : 'bg-muted'
-        }`}>
-          {isUser ? (
+    if (isUser) {
+      // User messages - right aligned with bubble
+      return (
+        <div className="flex items-start justify-end space-x-3 mb-6">
+          <div className="max-w-[85%] rounded-2xl bg-primary px-4 py-3 text-primary-foreground">
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+          </div>
+          <div className="flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full bg-primary">
             <User className="h-4 w-4 text-primary-foreground" />
-          ) : (
-            <Bot className="h-4 w-4 text-muted-foreground" />
-          )}
+          </div>
         </div>
-        <div
-          className={`flex max-w-[80%] flex-col gap-2 rounded-lg px-4 py-2 text-sm ${
-            isUser
-              ? 'bg-primary text-primary-foreground'
-              : isError
-              ? 'bg-destructive/10 text-destructive'
-              : 'bg-muted'
-          }`}
-        >
+      );
+    }
+
+    // Assistant messages - left aligned without bubble, Claude-style
+    return (
+      <div className="flex items-start space-x-3 mb-6">
+        <div className="flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full bg-muted">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="max-w-[85%] flex-1">
           {message.loading ? (
-            <div className="flex items-center space-x-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Thinking...</span>
+            <div className="flex items-center space-x-2 py-3">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Thinking...</span>
+            </div>
+          ) : isError ? (
+            <div className="py-3">
+              <p className="text-sm text-destructive">{message.content}</p>
             </div>
           ) : (
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            // Assistant messages use markdown rendering without background
+            <MarkdownRenderer content={message.content} />
           )}
         </div>
       </div>
@@ -305,7 +312,7 @@ export default function ChatInterface({ sessionUuid, sessionData, onSwitchToVoic
         </div>
       </div>
 
-      <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-6 py-4">
         {messages.map((message, index) => (
           <div key={index} className="animate-fade-in">
             <MessageBubble message={message} />

@@ -553,16 +553,22 @@ class EnhancedRAGService:
 
                 # Create an enhanced system prompt for Gemma2:9b
                 system_prompt = """You are a helpful AI Study Buddy assistant. Your goal is to answer questions about the user's documents. 
-                
+
                 IMPORTANT INSTRUCTIONS:
                 1. Base your answer STRICTLY on the provided context. Do not use any other knowledge.
                 2. If the context doesn't contain relevant information, state clearly that you cannot find the answer in the provided documents.
                 3. Cite sources when appropriate by referring to the document names mentioned in the context.
-                4. Format your responses for clarity using markdown when helpful.
-                5. Be concise and focused in your responses.
+                4. **ALWAYS format your responses using proper markdown structure**:
+                   - Use ## for main headings to break up sections
+                   - Use ### for sub-headings when appropriate
+                   - Use **bold text** for important terms and concepts
+                   - Use bullet points (-) or numbered lists (1.) to organize information
+                   - Leave blank lines between sections for better readability
+                   - Use `code formatting` for technical terms when relevant
+                5. Structure your responses with clear sections and proper spacing.
                 6. When answering technical questions, be precise and accurate.
                 
-                Remember, your goal is to help the user understand their own documents better."""
+                Remember, your goal is to help the user understand their own documents better. Always use markdown formatting to make your responses clear and well-organized."""
                 
                 # Create a standardized human prompt
                 human_prompt = """Here is the context from your documents:
@@ -571,7 +577,7 @@ class EnhancedRAGService:
                 
                 Question: {question}
                 
-                Please provide a clear answer based only on the information in the context above."""
+                Please provide a clear, well-structured answer using proper markdown formatting. Break your response into logical sections with headings, use bullet points for lists, and ensure proper spacing between sections."""
                 
                 # Create the prompt template
                 prompt = ChatPromptTemplate.from_messages([
@@ -592,29 +598,29 @@ class EnhancedRAGService:
 
                 logger.debug(f"Query being sent to model: {query.query}")
 
-                # Stream the results with sentence-level chunking
-                current_sentence = ""
+                # Stream the results with markdown-aware chunking
                 buffer = ""
                 
                 try:
                     async for chunk in chain.astream(query.query):
                         buffer += chunk
 
-                        # Process complete sentences
-                        sentences = re.split(r'(?<=[.!?])\s+', buffer)
+                        # Process complete lines/paragraphs while preserving markdown structure
+                        # Split on double newlines (paragraph breaks) or single newlines with markdown patterns
+                        lines = buffer.split('\n')
+                        
+                        if len(lines) > 1:  # We have at least one complete line
+                            complete_lines = lines[:-1]  # All but the last (possibly incomplete) line
+                            buffer = lines[-1]  # Keep the last incomplete line in buffer
 
-                        if len(sentences) > 1:  # We have at least one complete sentence
-                            complete_sentences = sentences[:-1]  # All but the last (possibly incomplete) sentence
-                            buffer = sentences[-1]  # Keep the last incomplete sentence in buffer
-
-                            for sentence in complete_sentences:
-                                if sentence.strip():
-                                    yield self.format_sse({
-                                        "type": "response",
-                                        "content": sentence.strip() + " ",
-                                        "provider": provider
-                                    })
-                                    await asyncio.sleep(0.05)  # Small delay for smoother streaming
+                            for line in complete_lines:
+                                # Send the line with its newline character to preserve formatting
+                                yield self.format_sse({
+                                    "type": "response", 
+                                    "content": line + "\n",
+                                    "provider": provider
+                                })
+                                await asyncio.sleep(0.02)  # Smaller delay for smoother streaming
                 except Exception as stream_error:
                     error_str = str(stream_error).lower()
                     if ("429" in error_str or "rate limit" in error_str or
@@ -632,7 +638,7 @@ class EnhancedRAGService:
                 if buffer.strip():
                     yield self.format_sse({
                         "type": "response",
-                        "content": buffer.strip(),
+                        "content": buffer,
                         "provider": provider
                     })
 

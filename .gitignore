@@ -52,5 +52,5 @@ dist/
 *.idea/
 *.vscode/
 *.iml
-
+node_modules
 human_testing
