@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://study-buddy-api-874705924472.us-central1.run.app/api/v1';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -10,21 +10,21 @@ const api = axios.create({
 });
 
 export const switchModel = async (provider) => {
-    try {
-      const response = await api.post('/model/switch', {
-        provider: provider,
-        temperature: 0.7,
-      });
-      return response.data;
-    } catch (error) {
-      throw new Error(error.response?.data?.detail || 'Error switching model provider');
-    }
-  };
+  try {
+    const response = await api.post('/model/switch', {
+      provider: provider,
+      temperature: 0.7,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error switching model provider');
+  }
+};
 
 export const uploadDocument = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
-  
+
   try {
     const response = await api.post('/documents/', formData, {
       headers: {
@@ -75,32 +75,32 @@ export const getDocumentStatus = async (documentId) => {
 };
 
 export const queryDocuments = async (question, contextWindow = 3, modelProvider = null, sessionUuid = null) => {
-    try {
-      let url = `${API_BASE_URL}/query/`;
-      if (sessionUuid) {
-        url += `?session_uuid=${encodeURIComponent(sessionUuid)}`;
-      }
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: question,
-          context_window: contextWindow,
-          model_provider: modelProvider
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      return response;
-    } catch (error) {
-      throw new Error(error.message || 'Error querying documents');
+  try {
+    let url = `${API_BASE_URL}/query/`;
+    if (sessionUuid) {
+      url += `?session_uuid=${encodeURIComponent(sessionUuid)}`;
     }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: question,
+        context_window: contextWindow,
+        model_provider: modelProvider
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return response;
+  } catch (error) {
+    throw new Error(error.message || 'Error querying documents');
+  }
 };
 
 export const checkStatus = async () => {
@@ -113,30 +113,30 @@ export const checkStatus = async () => {
 };
 
 export const deleteDocument = async (documentId) => {
-    try {
-      const response = await api.delete(`/documents/${documentId}`);
-      return response.data;
-    } catch (error) {
-      throw new Error(error.response?.data?.detail || 'Error deleting document');
-    }
-  };
+  try {
+    const response = await api.delete(`/documents/${documentId}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error deleting document');
+  }
+};
 
 export const deleteDocumentByFilename = async (filename) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/documents/by-filename/${encodeURIComponent(filename)}`, {
-        method: 'DELETE',
-      });
+  try {
+    const response = await fetch(`${API_BASE_URL}/documents/by-filename/${encodeURIComponent(filename)}`, {
+      method: 'DELETE',
+    });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Error deleting document');
-      }
-
-      return await response.json();
-    } catch (error) {
-      throw new Error(error.message || 'Error deleting document');
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Error deleting document');
     }
-  };
+
+    return await response.json();
+  } catch (error) {
+    throw new Error(error.message || 'Error deleting document');
+  }
+};
 
 export const getChatSessions = async (limit = 20) => {
   try {
@@ -241,10 +241,10 @@ export const endVoiceChat = async (sessionUuid) => {
 };
 
 export const getVoiceChatConfig = async () => {
-    try {
-        const response = await api.get('/voice-chat/config');
-        return response.data;
-    } catch (error) {
-        throw new Error(error.response?.data?.detail || 'Error getting voice chat config');
-    }
+  try {
+    const response = await api.get('/voice-chat/config');
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Error getting voice chat config');
+  }
 };

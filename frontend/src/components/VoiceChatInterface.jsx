@@ -18,12 +18,12 @@ export default function VoiceChatInterface({ sessionUuid, onEndSession }) {
 
 
   useEffect(() => {
-    cancelledRef.current = false; // reset cancellation state
+    let isActive = true;
 
-    safeConnect();
+    safeConnect(() => isActive);
 
     return () => {
-      cancelledRef.current = true; // set on unmount or deps change
+      isActive = false;
       isConnectingRef.current = false;
       if (conversationRef.current) {
         try {
@@ -34,7 +34,8 @@ export default function VoiceChatInterface({ sessionUuid, onEndSession }) {
     };
   }, [sessionUuid]);
 
-  const safeConnect = async () => {
+  const safeConnect = async (checkActive = () => true) => {
+    if (!checkActive()) return;
     if (isConnectingRef.current) return;
     isConnectingRef.current = true;
 
@@ -53,8 +54,7 @@ export default function VoiceChatInterface({ sessionUuid, onEndSession }) {
 
       await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      if (cancelledRef.current) return; // <-- fix here
-
+      if (!checkActive()) return;
 
       const conv = await Conversation.startSession({
         agentId: data.agent_id,
@@ -76,6 +76,14 @@ export default function VoiceChatInterface({ sessionUuid, onEndSession }) {
           setIsSpeaking(mode.mode === 'speaking');
         },
       });
+
+      // FIX: Check if we were cancelled while connecting (Strict Mode race condition)
+      if (!checkActive()) {
+        console.log('Connection cancelled during initialization, cleaning up...');
+        await conv.endSession();
+        return;
+      }
+
       conversationRef.current = conv;
       setConversation(conv);
     } catch (err) {
@@ -89,53 +97,9 @@ export default function VoiceChatInterface({ sessionUuid, onEndSession }) {
 
 
 
-  const fetchConfigAndConnect = async () => {
-    try {
-      setIsConnecting(true);
-      const data = await getVoiceChatConfig();
-      setConfig(data);
-      await initializeConversation(data);
-    } catch (err) {
-      setError('Failed to initialize voice chat');
-      console.error('Voice chat initialization error:', err);
-    } finally {
-      setIsConnecting(false);
-    }
-  };
 
-  const initializeConversation = async (config) => {
-    try {
-      // Request microphone permission first
-      await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      console.log('Starting ElevenLabs conversation with config:', { agentId: config.agent_id });
-      const conv = await Conversation.startSession({
-        agentId: config.agent_id,
-        onConnect: () => {
-          setIsConnected(true);
-          setConnectionStatus('connected');
-          console.log('Voice chat connected');
-        },
-        onDisconnect: () => {
-          setIsConnected(false);
-          setConnectionStatus('disconnected');
-          console.log('Voice chat disconnected');
-        },
-        onError: (error) => {
-          setError('Connection error occurred');
-          console.error('Voice chat error:', error);
-        },
-        onModeChange: (mode) => {
-          setIsSpeaking(mode.mode === 'speaking');
-        }
-      });
 
-      setConversation(conv);
-    } catch (err) {
-      setError('Failed to start voice conversation');
-      console.error('Conversation initialization error:', err);
-    }
-  };
 
   const handleToggleMute = async () => {
     if (!conversation) return;
@@ -192,7 +156,7 @@ export default function VoiceChatInterface({ sessionUuid, onEndSession }) {
           <h3 className="text-lg font-medium text-foreground mb-2">Voice Chat Error</h3>
           <p className="text-muted-foreground mb-4">{error}</p>
           <button
-            onClick={fetchConfigAndConnect}
+            onClick={() => safeConnect()}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
           >
             Retry Connection
@@ -278,7 +242,7 @@ export default function VoiceChatInterface({ sessionUuid, onEndSession }) {
               <PhoneOff className="h-6 w-6" />
             </button>
             <button
-              onClick={safeConnect} // or fetchConfigAndConnect, depending on what you intend
+              onClick={() => safeConnect()} // or fetchConfigAndConnect, depending on what you intend
               disabled={isConnected}
               className="p-4 rounded-full bg-green-500 hover:bg-red-600 text-white transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Connect"

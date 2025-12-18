@@ -2,7 +2,7 @@ import os
 from pptx import Presentation
 from nbformat import read
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 def extract_text_from_pdf(pdf_path):
     pdf_loader = PyPDFLoader(pdf_path)

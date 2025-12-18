@@ -7,7 +7,14 @@ from datetime import datetime
 import aiofiles
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.schemas import Document, QueryRequest, LLMConfig, DocumentResponse, ProcessingStatus
+from app.models.schemas import (
+    Document,
+    QueryRequest,
+    LLMConfig,
+    DocumentResponse,
+    DocumentStatusResponse,
+    ProcessingStatus,
+)
 from app.database.models import Document as DBDocument, ProcessingStatus as DBProcessingStatus
 from app.database.services import DocumentService
 from app.database.connection import get_db_session
@@ -159,6 +166,26 @@ async def list_documents(
     except Exception as e:
         logger.error(f"Error listing documents: {str(e)}")
         raise HTTPException(status_code=500, detail="Error listing documents")
+
+@router.get("/documents/{document_id}/status", response_model=DocumentStatusResponse)
+async def get_document_status(document_id: int, db: AsyncSession = Depends(get_db_session)):
+    """Fetch processing status for a single document."""
+    try:
+        document = await DocumentService.get_document_by_id(db, document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        return DocumentStatusResponse(
+            processing_status=document.processing_status,
+            updated_at=document.updated_at,
+            chunk_count=document.chunk_count,
+            document_metadata=document.document_metadata,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching document status {document_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching document status")
 
 @router.post("/query/")
 async def query_documents_endpoint(

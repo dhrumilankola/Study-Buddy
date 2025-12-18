@@ -62,7 +62,7 @@ $ psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE study_buddy TO study_bud
 
 # 4. Run backend & frontend (separate terminals)
 $ cd backend && make run   # or `python main.py`
-$ cd ../frontend && npm start
+$ cd ../frontend && npm run dev
 ```
 
 _Need Docker?_ A containerised setup is tracked in `docker-compose.yml` (coming soon).

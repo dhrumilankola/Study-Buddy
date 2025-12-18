@@ -42,6 +42,11 @@ htmlcov/
 *.pid
 *.seed
 docker-compose.override.yml
+env.yaml
+.gcloudignore
+.dockerignore
+deploy.sh
+deploy_local_image.sh
 
 # Build files
 build/

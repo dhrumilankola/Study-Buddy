@@ -50,7 +50,8 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['Menlo','sans-serif', 'ui-sans-serif', 'system-ui'],
+        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        mono: ['Menlo', 'Monaco', 'Courier New', 'monospace'],
       },
       borderRadius: {
         lg: "var(--radius)",

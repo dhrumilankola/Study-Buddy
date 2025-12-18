@@ -25,11 +25,12 @@ import {
   Remove as RemoveIcon
 } from '@mui/icons-material';
 import { formatDistanceToNow } from 'date-fns';
+import { API_BASE_URL } from '../api';
 
 const SessionDocuments = ({ 
   sessionUuid, 
   onDocumentsChange,
-  apiBaseUrl = 'http://localhost:8000/api/v1'
+  apiBaseUrl = API_BASE_URL
 }) => {
   const [sessionDocuments, setSessionDocuments] = useState([]);
   const [availableDocuments, setAvailableDocuments] = useState([]);

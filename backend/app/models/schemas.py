@@ -44,6 +44,15 @@ class DocumentResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class DocumentStatusResponse(BaseModel):
+    processing_status: ProcessingStatus
+    updated_at: datetime
+    chunk_count: int = 0
+    document_metadata: Optional[Dict[str, Any]] = {}
+
+    class Config:
+        from_attributes = True
+
 class QueryRequest(BaseModel):
     query: str
     context_window: Optional[int] = Field(default=3, ge=1, le=10)

@@ -31,13 +31,14 @@ import {
 } from '@mui/icons-material';
 import { formatDistanceToNow } from 'date-fns';
 import EnhancedSessionCreator from './EnhancedSessionCreator';
+import { API_BASE_URL } from '../api';
 
 const ChatSessionManager = ({
   onSessionSelect,
   currentSessionId,
   onNewSession,
   onManageDocuments,
-  apiBaseUrl = 'http://localhost:8000/api/v1',
+  apiBaseUrl = API_BASE_URL,
   showHeader = true,
 }) => {
   const [sessions, setSessions] = useState([]);

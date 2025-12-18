@@ -1,8 +1,8 @@
 import { useState, useCallback } from 'react';
 import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
-import { uploadDocument } from '../api';
+import { uploadDocument, getDocumentStatus } from '../api';
 
-export default function FileUpload() {
+export default function FileUpload({ onUploadComplete = () => {} }) {
   const [dragActive, setDragActive] = useState(false);
   const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -41,6 +41,48 @@ export default function FileUpload() {
     }))]);
   };
 
+  const pollDocumentStatus = useCallback((documentId, fileRef) => {
+    const maxAttempts = 60;
+    let attempts = 0;
+
+    const poll = async () => {
+      try {
+        const status = await getDocumentStatus(documentId);
+        setFiles(prev => prev.map(f =>
+          f.file === fileRef
+            ? { ...f, processingStatus: status.processing_status }
+            : f
+        ));
+
+        if (status.processing_status === 'indexed') {
+          setFiles(prev => prev.map(f =>
+            f.file === fileRef
+              ? { ...f, processingStatus: 'indexed', status: 'completed' }
+              : f
+          ));
+          onUploadComplete();
+        } else if (['error', 'failed'].includes(status.processing_status)) {
+          setFiles(prev => prev.map(f =>
+            f.file === fileRef
+              ? { ...f, status: 'error', error: 'Processing failed' }
+              : f
+          ));
+        } else if (attempts < maxAttempts) {
+          attempts += 1;
+          setTimeout(poll, 2000);
+        }
+      } catch (err) {
+        console.error('Error polling document status:', err);
+        if (attempts < maxAttempts) {
+          attempts += 1;
+          setTimeout(poll, 4000);
+        }
+      }
+    };
+
+    poll();
+  }, [onUploadComplete]);
+
   const handleUpload = async () => {
     setUploading(true);
 
@@ -55,18 +97,23 @@ export default function FileUpload() {
         ));
 
         const response = await uploadDocument(fileObj.file);
+        const createdDocument = response?.document ?? response;
 
-        setFiles(prev => prev.map(f =>
-          f.file === fileObj.file
-            ? {
-                ...f,
-                status: 'completed',
-                progress: 100,
-                documentId: response.document?.id,
-                processingStatus: response.document?.processing_status || 'processing'
-              }
-            : f
-        ));
+        setFiles(prev => prev.map(f => {
+          if (f.file !== fileObj.file) return f;
+          const newFile = {
+            ...f,
+            status: 'completed',
+            progress: 100,
+            documentId: createdDocument?.id,
+            processingStatus: createdDocument?.processing_status || 'processing'
+          };
+          return newFile;
+        }));
+
+        if (createdDocument?.id) {
+          pollDocumentStatus(createdDocument.id, fileObj.file);
+        }
       } catch (error) {
         setFiles(prev => prev.map(f =>
           f.file === fileObj.file
